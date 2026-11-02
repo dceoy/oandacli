@@ -277,17 +277,20 @@ type runConfig struct {
 	// denyMutations, when set, refuses every state-changing command with
 	// this message (used by the MCP server without --allow-trading).
 	denyMutations string
+	// base, when set, is a long-lived client whose transport and rate limiter
+	// are shared by every command (used by the MCP server).
+	base *oanda.Client
 }
 
 // newEnv builds the API client and applies the safety policy for cmd.
 func (a *App) newEnv(cmd *Command, cfg runConfig) (*Env, error) {
 	env := &Env{}
 	if v := strings.TrimSpace(a.Getenv(EnvMaxOrderUnits)); v != "" {
-		f, err := strconv.ParseFloat(v, 64)
-		if err != nil || f < 0 {
-			return nil, usagef("%s must be a non-negative number", EnvMaxOrderUnits)
+		limit, err := parseUnitLimit(v)
+		if err != nil {
+			return nil, err
 		}
-		env.Policy.MaxOrderUnits = f
+		env.Policy.MaxOrderUnits = limit
 	}
 	if cmd.Local {
 		return env, nil
@@ -315,6 +318,21 @@ func (a *App) newEnv(cmd *Command, cfg runConfig) (*Env, error) {
 			return nil, usagef("%v", err)
 		}
 	}
+	if cfg.base != nil {
+		// Defense in depth: the client itself refuses writes for read-only commands.
+		env.Client = cfg.base.Derive(!cmd.Mutating, cfg.dryRun)
+		return env, nil
+	}
+	c, err := a.newClient(cfg, oenv, !cmd.Mutating)
+	if err != nil {
+		return nil, err
+	}
+	env.Client = c
+	return env, nil
+}
+
+// newClient builds an API client from the global configuration.
+func (a *App) newClient(cfg runConfig, oenv oanda.Environment, readOnly bool) (*oanda.Client, error) {
 	token, err := a.loadToken(cfg.tokenFile)
 	if err != nil {
 		if !cfg.dryRun {
@@ -328,7 +346,7 @@ func (a *App) newEnv(cmd *Command, cfg runConfig) (*Env, error) {
 		oanda.WithTimeout(cfg.timeout),
 		oanda.WithUserAgent("oandacli/" + Version),
 		// Defense in depth: the client itself refuses writes for read-only commands.
-		oanda.WithReadOnly(!cmd.Mutating),
+		oanda.WithReadOnly(readOnly),
 		oanda.WithDryRun(cfg.dryRun),
 	}
 	if cfg.timeout <= 0 {
@@ -341,8 +359,7 @@ func (a *App) newEnv(cmd *Command, cfg runConfig) (*Env, error) {
 	if err != nil {
 		return nil, usagef("%v", err)
 	}
-	env.Client = c
-	return env, nil
+	return c, nil
 }
 
 // loadToken reads the token from a file (preferred) or the environment.

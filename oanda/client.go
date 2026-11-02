@@ -3,13 +3,14 @@ package oanda
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand/v2"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -322,6 +323,15 @@ func NewClient(token Token, opts ...Option) (*Client, error) {
 	return c, nil
 }
 
+// Derive returns a copy of c with the given read-only and dry-run settings.
+// The copy shares c's HTTP transport (connection pool) and rate limiter, so
+// many short-lived derived clients behave like one client towards OANDA.
+func (c *Client) Derive(readOnly, dryRun bool) *Client {
+	cp := *c
+	cp.readOnly, cp.dryRun = readOnly, dryRun
+	return &cp
+}
+
 // Environment returns the environment the client was created for.
 func (c *Client) Environment() Environment { return c.env }
 
@@ -562,8 +572,13 @@ func backoff(attempt int) time.Duration {
 	if d > 5*time.Second {
 		d = 5 * time.Second
 	}
-	// Jitter in [d/2, d]. Retry jitter is not security-sensitive.
-	return d/2 + time.Duration(rand.Int64N(int64(d/2)+1)) // #nosec G404 -- retry jitter only
+	// Jitter in [d/2, d], drawn from crypto/rand (no math/rand needed).
+	half := int64(d / 2)
+	n, err := rand.Int(rand.Reader, big.NewInt(half+1))
+	if err != nil {
+		return d
+	}
+	return time.Duration(half + n.Int64())
 }
 
 func retryAfter(v string) (time.Duration, bool) {

@@ -92,10 +92,21 @@ func (a *App) runMCP(ctx context.Context, cmds []*Command, args []string) int {
 		cfg.denyMutations = "trading tools are disabled; restart the MCP server with --allow-trading"
 	}
 	// Fail fast on configuration errors (missing token, bad environment).
-	if _, err := a.newEnv(&Command{Path: []string{"probe"}}, cfg); err != nil {
+	if _, err := a.newEnv(&Command{Path: []string{"probe"}, Local: true}, cfg); err != nil {
 		return a.fail(err)
 	}
-	oenv, _ := oanda.ParseEnvironment(g.env)
+	oenv, err := oanda.ParseEnvironment(g.env)
+	if err != nil {
+		return a.fail(usagef("%v", err))
+	}
+	// One client for the whole session: tool calls share its connection pool
+	// and rate limiter (OANDA allows 2 new connections/s and 120 requests/s).
+	// Per-call read-only and dry-run settings are applied with Client.Derive.
+	base, err := a.newClient(cfg, oenv, true)
+	if err != nil {
+		return a.fail(err)
+	}
+	cfg.base = base
 	exposeTrading := allowTrading && !g.readOnly && (oenv != oanda.Live || g.allowLive)
 
 	s := &mcpServer{app: a, cfg: cfg, tools: map[string]*Command{}, out: bufio.NewWriter(a.Stdout), pending: map[string]context.CancelFunc{}}
@@ -113,16 +124,49 @@ func (a *App) runMCP(ctx context.Context, cmds []*Command, args []string) int {
 }
 
 func (s *mcpServer) serve(ctx context.Context, in io.Reader) error {
-	// On end of input, let in-flight calls finish and deliver their results;
-	// cancellation of the parent context (e.g. SIGINT) still aborts them.
+	// On end of input, let in-flight calls finish and deliver their results.
+	// Cancellation of ctx (e.g. SIGINT/SIGTERM) aborts in-flight calls and
+	// returns even while the client keeps stdin open without sending.
 	defer s.wg.Wait()
-	sc := bufio.NewScanner(in)
-	sc.Buffer(make([]byte, 0, 64<<10), mcpMaxLine)
-	for sc.Scan() {
+	lines := make(chan string)
+	scanErr := make(chan error, 1)
+	go func() {
+		defer close(lines)
+		sc := bufio.NewScanner(in)
+		sc.Buffer(make([]byte, 0, 64<<10), mcpMaxLine)
+		for sc.Scan() {
+			select {
+			case lines <- sc.Text():
+			case <-ctx.Done():
+				return
+			}
+		}
+		scanErr <- sc.Err()
+	}()
+	for {
+		var text string
+		select {
+		case <-ctx.Done():
+			return nil
+		case t, ok := <-lines:
+			if !ok {
+				select {
+				case err := <-scanErr:
+					if err != nil {
+						return err
+					}
+				default:
+					return nil // ctx was cancelled
+				}
+				s.wg.Wait()
+				return s.failed()
+			}
+			text = t
+		}
 		if err := s.failed(); err != nil {
 			return fmt.Errorf("write to MCP client: %w", err)
 		}
-		line := strings.TrimSpace(sc.Text())
+		line := strings.TrimSpace(text)
 		if line == "" {
 			continue
 		}
@@ -133,11 +177,6 @@ func (s *mcpServer) serve(ctx context.Context, in io.Reader) error {
 		}
 		s.handle(ctx, req)
 	}
-	if err := sc.Err(); err != nil {
-		return err
-	}
-	s.wg.Wait()
-	return s.failed()
 }
 
 func (s *mcpServer) send(resp rpcResponse) {
@@ -330,7 +369,9 @@ func (s *mcpServer) invoke(ctx context.Context, cmd *Command, arguments map[stri
 		case "account":
 			cfg.account = conv.(string)
 		case "dry-run":
-			cfg.dryRun = conv.(bool)
+			// A per-call dry_run can only enable previewing; it never
+			// overrides a server started with --dry-run.
+			cfg.dryRun = s.cfg.dryRun || conv.(bool)
 		default:
 			values[p.Name] = conv
 		}

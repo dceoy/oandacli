@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
-	"strconv"
+	"math/big"
+	"regexp"
+	"strings"
 
 	"github.com/dceoy/oandacli/oanda"
 )
@@ -130,19 +131,42 @@ func buildEntryOrder(kind oanda.OrderType, a *Args) *oanda.OrderRequest {
 	return o
 }
 
-// checkUnits enforces Policy.MaxOrderUnits.
+var reUnits = regexp.MustCompile(`^-?[0-9]{1,20}(?:\.[0-9]{1,20})?$`)
+
+// parseUnitLimit parses OANDA_MAX_ORDER_UNITS as a positive plain decimal.
+// Values such as NaN, Inf, exponents or zero are rejected so that a typo
+// cannot silently disable the guard.
+func parseUnitLimit(v string) (*big.Rat, error) {
+	limit, ok := new(big.Rat).SetString(v)
+	if !reUnits.MatchString(v) || strings.HasPrefix(v, "-") || !ok || limit.Sign() <= 0 {
+		return nil, usagef("%s must be a positive decimal number such as 10000 (got %q); unset it to disable the limit", EnvMaxOrderUnits, v)
+	}
+	return limit, nil
+}
+
+// checkUnits enforces Policy.MaxOrderUnits with exact decimal arithmetic.
+// Units that cannot be verified are refused while a limit is configured.
 func (e *Env) checkUnits(units string) error {
-	if e.Policy.MaxOrderUnits <= 0 || units == "" {
+	limit := e.Policy.MaxOrderUnits
+	if limit == nil || units == "" {
 		return nil
 	}
-	f, err := strconv.ParseFloat(units, 64)
-	if err != nil {
-		return nil // validated by the SDK
+	u, ok := new(big.Rat).SetString(units)
+	if !reUnits.MatchString(units) || !ok {
+		return &PolicyError{Msg: fmt.Sprintf("order units %q cannot be checked against %s; use a plain decimal number", units, EnvMaxOrderUnits)}
 	}
-	if math.Abs(f) > e.Policy.MaxOrderUnits {
-		return &PolicyError{Msg: fmt.Sprintf("order units %s exceed the configured limit of %g (OANDA_MAX_ORDER_UNITS)", units, e.Policy.MaxOrderUnits)}
+	if u.Abs(u).Cmp(limit) > 0 {
+		return &PolicyError{Msg: fmt.Sprintf("order units %s exceed the configured limit of %s (%s)", units, limit.FloatString(precision(limit)), EnvMaxOrderUnits)}
 	}
 	return nil
+}
+
+func precision(r *big.Rat) int {
+	n, exact := r.FloatPrec()
+	if !exact {
+		return 20
+	}
+	return n
 }
 
 // orderBody extracts the order object from --body / --body-file input and

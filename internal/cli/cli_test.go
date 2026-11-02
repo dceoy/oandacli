@@ -6,13 +6,16 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 const testAccount = "101-004-1234567-001"
@@ -21,6 +24,7 @@ type harness struct {
 	srv    *httptest.Server
 	env    map[string]string
 	calls  atomic.Int32
+	conns  atomic.Int32 // new TCP connections accepted by the server
 	last   atomic.Pointer[http.Request]
 	body   atomic.Pointer[[]byte]
 	stdout bytes.Buffer
@@ -30,13 +34,19 @@ type harness struct {
 func newHarness(t *testing.T, respond func(w http.ResponseWriter, r *http.Request)) *harness {
 	t.Helper()
 	h := &harness{}
-	h.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h.srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.calls.Add(1)
 		b, _ := io.ReadAll(r.Body)
 		h.last.Store(r)
 		h.body.Store(&b)
 		respond(w, r)
 	}))
+	h.srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			h.conns.Add(1)
+		}
+	}
+	h.srv.Start()
 	t.Cleanup(h.srv.Close)
 	h.env = map[string]string{
 		EnvToken:     "test-token",
@@ -98,6 +108,15 @@ func TestExitCodesAndErrors(t *testing.T) {
 		{name: "live allowed with flag", env: map[string]string{EnvEnvironment: "live"}, args: []string{"trade", "close", "--trade", "1", "--allow-live"}, wantCode: ExitOK, wantCall: true},
 		{name: "max units", env: map[string]string{EnvMaxOrderUnits: "1000"}, args: []string{"order", "market", "--instrument", "EUR_USD", "--units", "-5000"}, wantCode: ExitPolicy, wantKind: "policy"},
 		{name: "max units raw body", env: map[string]string{EnvMaxOrderUnits: "1000"}, args: []string{"order", "create", "--body", `{"order":{"type":"MARKET","instrument":"EUR_USD","units":"2000"}}`}, wantCode: ExitPolicy, wantKind: "policy"},
+		{name: "max units raw body unverifiable", env: map[string]string{EnvMaxOrderUnits: "1000"}, args: []string{"order", "create", "--body", `{"order":{"type":"MARKET","instrument":"EUR_USD","units":"NaN"}}`}, wantCode: ExitPolicy, wantKind: "policy"},
+		{name: "max units exact decimal at limit", env: map[string]string{EnvMaxOrderUnits: "1000.5"}, args: []string{"order", "market", "--instrument", "EUR_USD", "--units", "-1000.5"}, wantCode: ExitOK, wantCall: true},
+		{name: "max units exact decimal above limit", env: map[string]string{EnvMaxOrderUnits: "1000.5"}, args: []string{"order", "market", "--instrument", "EUR_USD", "--units", "1000.50000000000000001"}, wantCode: ExitPolicy, wantKind: "policy"},
+		{name: "max units limit NaN", env: map[string]string{EnvMaxOrderUnits: "NaN"}, args: []string{"order", "market", "--instrument", "EUR_USD", "--units", "1"}, wantCode: ExitUsage, wantKind: "usage"},
+		{name: "max units limit Inf", env: map[string]string{EnvMaxOrderUnits: "Inf"}, args: []string{"order", "market", "--instrument", "EUR_USD", "--units", "1"}, wantCode: ExitUsage, wantKind: "usage"},
+		{name: "max units limit +Inf", env: map[string]string{EnvMaxOrderUnits: "+Inf"}, args: []string{"order", "market", "--instrument", "EUR_USD", "--units", "1"}, wantCode: ExitUsage, wantKind: "usage"},
+		{name: "max units limit exponent", env: map[string]string{EnvMaxOrderUnits: "1e3"}, args: []string{"order", "market", "--instrument", "EUR_USD", "--units", "1"}, wantCode: ExitUsage, wantKind: "usage"},
+		{name: "max units limit zero", env: map[string]string{EnvMaxOrderUnits: "0"}, args: []string{"order", "market", "--instrument", "EUR_USD", "--units", "1"}, wantCode: ExitUsage, wantKind: "usage"},
+		{name: "max units limit negative", env: map[string]string{EnvMaxOrderUnits: "-5"}, args: []string{"order", "market", "--instrument", "EUR_USD", "--units", "1"}, wantCode: ExitUsage, wantKind: "usage"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -360,4 +379,98 @@ func TestMCPStreamIsBounded(t *testing.T) {
 	if isErr || json.Unmarshal([]byte(text), &out) != nil || out.Count != mcpDefaultMessages {
 		t.Errorf("stream result = %s", text)
 	}
+}
+
+func TestMCPServerDryRunCannotBeDisabledPerCall(t *testing.T) {
+	h := newHarness(t, okJSON(`{}`))
+	resps := mcpSession(t, h, []string{"--allow-trading", "--dry-run"},
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"oanda_order_market","arguments":{"instrument":"EUR_USD","units":"10","dry_run":false}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"oanda_trade_close","arguments":{"trade":"1"}}}`,
+	)
+	for _, id := range []string{"1", "2"} {
+		if text, isErr := toolText(t, resps[id]); isErr || !strings.Contains(text, `"dryRun":true`) {
+			t.Errorf("call %s = %s", id, text)
+		}
+	}
+	if h.calls.Load() != 0 {
+		t.Errorf("server received %d requests despite --dry-run", h.calls.Load())
+	}
+}
+
+func TestMCPToolCallsShareConnections(t *testing.T) {
+	h := newHarness(t, okJSON(`{"accounts":[]}`))
+	reqs := make([]string, 0, 5)
+	for i := 1; i <= 5; i++ {
+		reqs = append(reqs, `{"jsonrpc":"2.0","id":`+string(rune('0'+i))+`,"method":"tools/call","params":{"name":"oanda_account_list","arguments":{}}}`)
+	}
+	// Send the calls one at a time so each can reuse the idle connection.
+	app := h.app("")
+	pr, pw := io.Pipe()
+	app.Stdin = pr
+	out := make(chan []string)
+	var stdout syncBuffer
+	app.Stdout = &stdout
+	done := make(chan int)
+	go func() { done <- app.Run(context.Background(), []string{"mcp"}) }()
+	go func() {
+		var got []string
+		for _, r := range reqs {
+			_, _ = io.WriteString(pw, r+"\n")
+			for stdout.Lines() <= len(got) {
+				time.Sleep(time.Millisecond)
+			}
+			got = append(got, r)
+		}
+		_ = pw.Close()
+		out <- got
+	}()
+	<-out
+	if code := <-done; code != ExitOK {
+		t.Fatalf("exit %d: %s", code, h.stderr.String())
+	}
+	if h.calls.Load() != 5 {
+		t.Fatalf("calls = %d, want 5", h.calls.Load())
+	}
+	if n := h.conns.Load(); n != 1 {
+		t.Errorf("server saw %d new connections for 5 sequential tool calls, want 1", n)
+	}
+}
+
+func TestMCPStopsOnContextCancelWhileStdinIdle(t *testing.T) {
+	h := newHarness(t, okJSON(`{}`))
+	app := h.app("")
+	pr, pw := io.Pipe()
+	defer func() { _ = pw.Close() }()
+	app.Stdin = pr
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() { done <- app.Run(ctx, []string{"mcp"}) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case code := <-done:
+		if code != ExitOK {
+			t.Errorf("exit %d: %s", code, h.stderr.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("MCP server did not stop after context cancellation")
+	}
+}
+
+// syncBuffer is a goroutine-safe bytes.Buffer that counts written lines.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) Lines() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return bytes.Count(b.buf.Bytes(), []byte("\n"))
 }

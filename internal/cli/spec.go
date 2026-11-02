@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"slices"
 	"strconv"
 	"strings"
@@ -71,8 +72,9 @@ type Env struct {
 
 // Policy holds safety limits applied before requests are sent.
 type Policy struct {
-	// MaxOrderUnits rejects orders whose absolute units exceed it (0 = off).
-	MaxOrderUnits float64
+	// MaxOrderUnits rejects orders whose absolute units exceed it (nil = off).
+	// It is an exact decimal so that no float rounding can weaken the limit.
+	MaxOrderUnits *big.Rat
 }
 
 // Args holds parsed, typed parameter values.

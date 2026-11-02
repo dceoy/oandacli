@@ -30,7 +30,7 @@ make build   # ./bin/oandacli
 | `OANDA_ENVIRONMENT` | `practice` (default) or `live`. Override it with `--env`. |
 | `OANDA_ALLOW_LIVE` | Must be `true` (or pass `--allow-live`) before any state-changing request is sent to the **live** environment. |
 | `OANDA_READ_ONLY` | `true` refuses every state-changing command. |
-| `OANDA_MAX_ORDER_UNITS` | Rejects orders whose absolute units exceed this value. |
+| `OANDA_MAX_ORDER_UNITS` | Rejects orders whose absolute units exceed this value. It must be a positive plain decimal such as `10000`; `NaN`, `Inf`, exponents and `0` are refused, and the comparison is exact. While it is set, orders whose units can't be checked are refused. |
 | `OANDA_API_URL`, `OANDA_STREAM_URL` | Override the base URLs, e.g. for a test server. They must be HTTPS unless the host is loopback. |
 
 The token is never accepted as a command-line flag, because flags are visible to other users in the process list.
@@ -121,6 +121,7 @@ How the MCP server behaves:
 
 - Tools are named `oanda_<group>_<command>`, e.g. `oanda_pricing_get` and `oanda_order_market`. Arguments use snake_case, and unknown arguments are rejected.
 - State-changing tools are only listed when the server starts with `--allow-trading`. In the live environment they also need `--allow-live`, and they are never listed with `--read-only`. Each one accepts `dry_run: true` and carries the MCP `destructiveHint` annotation.
+- All tool calls share one HTTP connection pool and one client-side rate limiter. A per-call `dry_run: false` can't override a server started with `--dry-run`.
 - Stream tools always return a bounded batch: `max_messages` defaults to 10 (maximum 1000) and `duration` defaults to 10s (maximum 2m).
 - Arguments that read local files (`--body-file`) are not available over MCP.
 
