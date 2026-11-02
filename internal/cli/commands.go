@@ -361,8 +361,10 @@ func Commands() []*Command {
 		{
 			Path: []string{"order", "list"}, Summary: "List orders", Account: true,
 			Params: []Param{
-				pIDs, {Name: "state", Type: TString, Desc: "Order state filter (default PENDING)", Enum: strs(oanda.OrderStateFilters)},
-				{Name: "instrument", Type: TString, Desc: "Instrument filter"}, pCount500, pBeforeID,
+				pIDs,
+				{Name: "state", Type: TString, Desc: "Order state filter (default PENDING)", Enum: strs(oanda.OrderStateFilters)},
+				{Name: "instrument", Type: TString, Desc: "Instrument filter"},
+				pCount500, pBeforeID,
 			},
 			Run: func(ctx context.Context, e *Env, a *Args) (any, error) {
 				return e.Client.ListOrders(ctx, e.AccountID, oanda.OrdersParams{
@@ -428,8 +430,10 @@ func Commands() []*Command {
 		{
 			Path: []string{"trade", "list"}, Summary: "List trades", Account: true,
 			Params: []Param{
-				pIDs, {Name: "state", Type: TString, Desc: "Trade state filter (default OPEN)", Enum: strs(oanda.TradeStateFilters)},
-				{Name: "instrument", Type: TString, Desc: "Instrument filter"}, pCount500, pBeforeID,
+				pIDs,
+				{Name: "state", Type: TString, Desc: "Trade state filter (default OPEN)", Enum: strs(oanda.TradeStateFilters)},
+				{Name: "instrument", Type: TString, Desc: "Instrument filter"},
+				pCount500, pBeforeID,
 			},
 			Run: func(ctx context.Context, e *Env, a *Args) (any, error) {
 				return e.Client.ListTrades(ctx, e.AccountID, oanda.TradesParams{

@@ -8,20 +8,18 @@ export UV_EXCLUDE_NEWER="${COOLDOWN_DAYS} days"
 export NPM_CONFIG_MIN_RELEASE_AGE="${COOLDOWN_DAYS}"
 export PNPM_CONFIG_MINIMUM_RELEASE_AGE=$((COOLDOWN_DAYS * 24 * 60))
 
-# Keep in sync with dceoy/gha-for-devops go-package-lint-and-scan.yml
-GOLANGCI_LINT_VERSION=v2.15.0
-GOSEC_VERSION=v2.30.0
-GOVULNCHECK_VERSION=v1.9.0
-
 # Go
-gofmt -w .
 go mod tidy
-go vet ./...
-go run "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}" run --fix ./...
-go run "github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}" -quiet ./...
-go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
+if [[ -f .golangci.yml ]]; then
+  GOLANGCI_LINT_CONFIG_ARGS=(-c .golangci.yml)
+else
+  GOLANGCI_LINT_CONFIG_ARGS=()
+fi
+golangci-lint "${GOLANGCI_LINT_CONFIG_ARGS[@]}" fmt --enable=gofumpt --enable=goimports
+golangci-lint "${GOLANGCI_LINT_CONFIG_ARGS[@]}" run --fix
+govulncheck ./...
+gosec ./...
 go test -race -count=1 ./...
-go build ./...
 
 # Markdown
 pnpm dlx oxfmt --write './**/*.md'
