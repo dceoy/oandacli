@@ -13,7 +13,7 @@ func streamHandler(lines []string, hang bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		for _, l := range lines {
-			fmt.Fprintln(w, l)
+			_, _ = fmt.Fprintln(w, l)
 			w.(http.Flusher).Flush()
 		}
 		if hang {

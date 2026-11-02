@@ -63,10 +63,11 @@ type mcpServer struct {
 	tools map[string]*Command
 	order []*Command
 
-	mu      sync.Mutex // guards out and pending
-	out     *bufio.Writer
-	pending map[string]context.CancelFunc
-	wg      sync.WaitGroup
+	mu       sync.Mutex // guards out, writeErr and pending
+	out      *bufio.Writer
+	writeErr error
+	pending  map[string]context.CancelFunc
+	wg       sync.WaitGroup
 }
 
 func (a *App) runMCP(ctx context.Context, cmds []*Command, args []string) int {
@@ -78,7 +79,7 @@ func (a *App) runMCP(ctx context.Context, cmds []*Command, args []string) int {
 	fs.BoolVar(&allowTrading, "allow-trading", false, "Expose state-changing tools (orders, closes, configuration)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			fmt.Fprint(a.Stdout, "Run an MCP server on stdio exposing OANDA tools.\n\nUsage:\n  oandacli mcp [--allow-trading] [--account ID] [--env practice|live] [--allow-live] [--read-only]\n\nBy default only read-only tools are exposed.\n")
+			_, _ = fmt.Fprint(a.Stdout, "Run an MCP server on stdio exposing OANDA tools.\n\nUsage:\n  oandacli mcp [--allow-trading] [--account ID] [--env practice|live] [--allow-live] [--read-only]\n\nBy default only read-only tools are exposed.\n")
 			return ExitOK
 		}
 		return a.fail(usagef("%v", err))
@@ -118,6 +119,9 @@ func (s *mcpServer) serve(ctx context.Context, in io.Reader) error {
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 0, 64<<10), mcpMaxLine)
 	for sc.Scan() {
+		if err := s.failed(); err != nil {
+			return fmt.Errorf("write to MCP client: %w", err)
+		}
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
 			continue
@@ -129,7 +133,11 @@ func (s *mcpServer) serve(ctx context.Context, in io.Reader) error {
 		}
 		s.handle(ctx, req)
 	}
-	return sc.Err()
+	if err := sc.Err(); err != nil {
+		return err
+	}
+	s.wg.Wait()
+	return s.failed()
 }
 
 func (s *mcpServer) send(resp rpcResponse) {
@@ -139,9 +147,21 @@ func (s *mcpServer) send(resp rpcResponse) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.out.Write(b)
-	s.out.WriteByte('\n')
-	s.out.Flush()
+	if s.writeErr != nil {
+		return
+	}
+	b = append(b, '\n')
+	if _, err := s.out.Write(b); err != nil {
+		s.writeErr = err
+		return
+	}
+	s.writeErr = s.out.Flush()
+}
+
+func (s *mcpServer) failed() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.writeErr
 }
 
 func (s *mcpServer) reply(id json.RawMessage, result any) {

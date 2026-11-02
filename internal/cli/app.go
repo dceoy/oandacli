@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"sort"
@@ -36,8 +37,8 @@ const (
 
 // Environment variables.
 const (
-	EnvToken         = "OANDA_API_TOKEN"
-	EnvTokenFile     = "OANDA_API_TOKEN_FILE"
+	EnvToken         = "OANDA_API_TOKEN"      // #nosec G101 -- variable name, not a credential
+	EnvTokenFile     = "OANDA_API_TOKEN_FILE" // #nosec G101 -- variable name, not a credential
 	EnvAccount       = "OANDA_ACCOUNT_ID"
 	EnvEnvironment   = "OANDA_ENVIRONMENT"
 	EnvAllowLive     = "OANDA_ALLOW_LIVE"
@@ -116,7 +117,7 @@ func (a *App) Run(ctx context.Context, args []string) int {
 
 	if len(path) == 0 {
 		if len(rest) > 0 && (rest[0] == "--version" || rest[0] == "-version") {
-			fmt.Fprintln(a.Stdout, Version)
+			_, _ = fmt.Fprintln(a.Stdout, Version)
 			return ExitOK
 		}
 		if len(rest) > 0 && rest[0] != "-h" && rest[0] != "--help" && rest[0] != "-help" {
@@ -130,7 +131,7 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	}
 	switch path[0] {
 	case "version":
-		fmt.Fprintln(a.Stdout, Version)
+		_, _ = fmt.Fprintln(a.Stdout, Version)
 		return ExitOK
 	case "help":
 		a.printUsage(a.Stdout, cmds, path[1:])
@@ -253,11 +254,12 @@ func (a *App) readBodyFile(path string) ([]byte, error) {
 	if path == "-" {
 		r = a.Stdin
 	} else {
-		f, err := os.Open(path)
+		// The path is chosen by the local user; --body-file is never exposed over MCP.
+		f, err := os.Open(filepath.Clean(path)) // #nosec G304 -- user-selected input file
 		if err != nil {
 			return nil, usagef("cannot read --body-file: %v", err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		r = f
 	}
 	b, err := io.ReadAll(io.LimitReader(r, limit+1))
@@ -348,11 +350,11 @@ func (a *App) newEnv(cmd *Command, cfg runConfig) (*Env, error) {
 // visible to other users via the process list.
 func (a *App) loadToken(file string) (oanda.Token, error) {
 	if file != "" {
-		f, err := os.Open(file)
+		f, err := os.Open(filepath.Clean(file)) // #nosec G304 -- user-configured token file, permission-checked below
 		if err != nil {
 			return oanda.Token{}, usagef("cannot open token file: %v", err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		st, err := f.Stat()
 		if err != nil {
 			return oanda.Token{}, usagef("cannot stat token file: %v", err)
@@ -500,12 +502,12 @@ func (a *App) fail(err error) int {
 	}
 	info := classify(err)
 	b, _ := json.Marshal(map[string]any{"error": info})
-	fmt.Fprintln(a.Stderr, string(b))
+	_, _ = fmt.Fprintln(a.Stderr, string(b))
 	return info.ExitCode
 }
 
 func (a *App) printUsage(w io.Writer, cmds []*Command, prefix []string) {
-	fmt.Fprintf(w, "oandacli %s - CLI for the OANDA REST-V20 API\n\nUsage:\n  oandacli <group> <command> [--flags]\n\nCommands:\n", Version)
+	_, _ = fmt.Fprintf(w, "oandacli %s - CLI for the OANDA REST-V20 API\n\nUsage:\n  oandacli <group> <command> [--flags]\n\nCommands:\n", Version)
 	for _, c := range cmds {
 		if len(prefix) > 0 && (len(c.Path) < len(prefix) || !slices.Equal(c.Path[:len(prefix)], prefix)) {
 			continue
@@ -514,10 +516,10 @@ func (a *App) printUsage(w io.Writer, cmds []*Command, prefix []string) {
 		if c.Mutating {
 			mark = " [trading]"
 		}
-		fmt.Fprintf(w, "  %-34s %s%s\n", c.Name(), c.Summary, mark)
+		_, _ = fmt.Fprintf(w, "  %-34s %s%s\n", c.Name(), c.Summary, mark)
 	}
 	if len(prefix) == 0 {
-		fmt.Fprint(w, `  schema                             Print a JSON description of all commands
+		_, _ = fmt.Fprint(w, `  schema                             Print a JSON description of all commands
   mcp                                Run as an MCP (Model Context Protocol) server on stdio
   version                            Print the version
 
@@ -537,12 +539,12 @@ Run 'oandacli <group> <command> --help' for flags.
 }
 
 func (a *App) printCommandHelp(w io.Writer, cmd *Command, fs *flag.FlagSet) {
-	fmt.Fprintf(w, "%s\n\nUsage:\n  oandacli %s [--flags]\n\n", cmd.Summary, cmd.Name())
+	_, _ = fmt.Fprintf(w, "%s\n\nUsage:\n  oandacli %s [--flags]\n\n", cmd.Summary, cmd.Name())
 	if cmd.Mutating {
-		fmt.Fprint(w, "This command changes account state. It is refused in read-only mode and,\nin the live environment, unless --allow-live is given.\n\n")
+		_, _ = fmt.Fprint(w, "This command changes account state. It is refused in read-only mode and,\nin the live environment, unless --allow-live is given.\n\n")
 	}
 	if len(cmd.Params) > 0 {
-		fmt.Fprintln(w, "Flags:")
+		_, _ = fmt.Fprintln(w, "Flags:")
 		for _, p := range cmd.Params {
 			req := ""
 			if p.Required && p.Default == nil {
@@ -555,11 +557,11 @@ func (a *App) printCommandHelp(w io.Writer, cmd *Command, fs *flag.FlagSet) {
 			if p.Default != nil {
 				extra += fmt.Sprintf(" (default %v)", p.Default)
 			}
-			fmt.Fprintf(w, "  --%-24s %s%s%s\n", p.Name+" "+typeHint(p.Type), p.Desc, extra, req)
+			_, _ = fmt.Fprintf(w, "  --%-24s %s%s%s\n", p.Name+" "+typeHint(p.Type), p.Desc, extra, req)
 		}
-		fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w)
 	}
-	fmt.Fprintln(w, "Global flags:")
+	_, _ = fmt.Fprintln(w, "Global flags:")
 	names := []string{}
 	fs.VisitAll(func(f *flag.Flag) {
 		for _, p := range cmd.Params {
@@ -571,7 +573,7 @@ func (a *App) printCommandHelp(w io.Writer, cmd *Command, fs *flag.FlagSet) {
 	})
 	sort.Strings(names)
 	for _, n := range names {
-		fmt.Fprintf(w, "  --%-24s %s\n", n, fs.Lookup(n).Usage)
+		_, _ = fmt.Fprintf(w, "  --%-24s %s\n", n, fs.Lookup(n).Usage)
 	}
 }
 

@@ -1,0 +1,29 @@
+---
+name: Claude Code review
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - ready_for_review
+    paths-ignore:
+      - .github/workflows/claude.yml
+permissions:
+  contents: read
+jobs:
+  claude-code-review:
+    if: >
+      github.event_name == 'pull_request'
+      && (! github.event.pull_request.draft)
+      && github.event.pull_request.user.type != 'Bot'
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    uses: dceoy/pr-loop/.github/workflows/claude-code-review.yml@main  # zizmor: ignore[unpinned-uses]
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}  # zizmor: ignore[secrets-outside-env]
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

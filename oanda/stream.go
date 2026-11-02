@@ -122,7 +122,7 @@ func (c *Client) stream(parent context.Context, r *request, fn StreamHandler) er
 		}
 		return fmt.Errorf("oanda: %s %s: %w", r.method, r.path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	requestID := resp.Header.Get("RequestID")
 	c.log(ctx, "stream opened", r, 1, resp.StatusCode, requestID, time.Since(start), nil)
 	if resp.StatusCode != http.StatusOK {

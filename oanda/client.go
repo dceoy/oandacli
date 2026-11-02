@@ -562,8 +562,8 @@ func backoff(attempt int) time.Duration {
 	if d > 5*time.Second {
 		d = 5 * time.Second
 	}
-	// Full jitter in [d/2, d).
-	return d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
+	// Jitter in [d/2, d]. Retry jitter is not security-sensitive.
+	return d/2 + time.Duration(rand.Int64N(int64(d/2)+1)) // #nosec G404 -- retry jitter only
 }
 
 func retryAfter(v string) (time.Duration, bool) {

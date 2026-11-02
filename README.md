@@ -191,13 +191,16 @@ Options:
 | Injection or path traversal | Account IDs, instruments, order and trade specifiers, transaction IDs, enums, decimals and timestamps are validated, and path segments are escaped. |
 | Duplicate orders | Only idempotent GETs are retried. POST, PUT and PATCH are sent once. |
 | Runaway agents | Practice is the default. Live trading requires explicit opt-in. Read-only mode, dry runs, `OANDA_MAX_ORDER_UNITS`, a client-side rate limit (below OANDA's 120 req/s), bounded MCP streams, a 32 MiB response limit and a 1 MiB stream line limit also apply. |
-| Supply chain | No third-party modules. CI runs `govulncheck` and `staticcheck`. |
+| Supply chain | No third-party modules. CI runs golangci-lint, gosec, govulncheck, OSV-Scanner, Trivy, Semgrep and CodeQL. |
 
 ## Development
 
 ```sh
-make check   # gofmt, go vet, staticcheck, tests with -race, govulncheck
+make check   # gofmt, go vet, golangci-lint, gosec, tests with -race, govulncheck
+make qa      # full local QA (also lints Markdown and GitHub Actions workflows)
 ```
+
+CI uses the shared [`go-package-lint-and-scan`](https://github.com/dceoy/gha-for-devops/blob/main/.github/workflows/go-package-lint-and-scan.yml) and [`go-package-test`](https://github.com/dceoy/gha-for-devops/blob/main/.github/workflows/go-package-test.yml) workflows from `dceoy/gha-for-devops`. Agent skills live in `.agents/skills/`; `.claude/skills` is a symlink to that directory.
 
 ## License
 

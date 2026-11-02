@@ -103,7 +103,7 @@ func TestRequestHeadersAndRawJSON(t *testing.T) {
 			t.Errorf("Accept-Datetime-Format = %q", got)
 		}
 		w.Header().Set("RequestID", "req-1")
-		io.WriteString(w, body)
+		_, _ = io.WriteString(w, body)
 	})
 	res, err := c.GetAccountSummary(context.Background(), testAccount)
 	if err != nil {
@@ -139,7 +139,7 @@ func TestRetries(t *testing.T) {
 					w.WriteHeader(http.StatusServiceUnavailable)
 					return
 				}
-				io.WriteString(w, `{"accounts":[]}`)
+				_, _ = io.WriteString(w, `{"accounts":[]}`)
 			})
 			err := tt.call(c)
 			if (err != nil) != tt.wantErr {
@@ -261,7 +261,7 @@ func TestOrderRejectionAPIError(t *testing.T) {
 		}
 		w.Header().Set("RequestID", "r9")
 		w.WriteHeader(http.StatusBadRequest)
-		io.WriteString(w, `{"orderRejectTransaction":{"id":"5","type":"MARKET_ORDER_REJECT","rejectReason":"INSUFFICIENT_MARGIN"},"errorCode":"INSUFFICIENT_MARGIN","errorMessage":"Insufficient margin"}`)
+		_, _ = io.WriteString(w, `{"orderRejectTransaction":{"id":"5","type":"MARKET_ORDER_REJECT","rejectReason":"INSUFFICIENT_MARGIN"},"errorCode":"INSUFFICIENT_MARGIN","errorMessage":"Insufficient margin"}`)
 	})
 	_, err := c.CreateOrder(context.Background(), testAccount, NewMarketOrder("EUR_USD", "1000000"))
 	var apiErr *APIError
@@ -275,7 +275,7 @@ func TestOrderRejectionAPIError(t *testing.T) {
 
 func TestTransactionResult(t *testing.T) {
 	raw := `{"orderCreateTransaction":{"id":"10","type":"MARKET_ORDER","instrument":"EUR_USD","units":"100","extra":1},"orderFillTransaction":{"id":"11","type":"ORDER_FILL","price":"1.1"},"orderCancelTransaction":null,"relatedTransactionIDs":["10","11"],"lastTransactionID":"11"}`
-	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, raw) })
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, raw) })
 	res, err := c.CreateOrder(context.Background(), testAccount, NewMarketOrder("EUR_USD", "100"))
 	if err != nil {
 		t.Fatal(err)
@@ -300,7 +300,7 @@ func TestTradeOrdersRequestJSON(t *testing.T) {
 
 func TestResponseSizeLimit(t *testing.T) {
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `{"accounts":[`+strings.Repeat(" ", 2048)+`]}`)
+		_, _ = io.WriteString(w, `{"accounts":[`+strings.Repeat(" ", 2048)+`]}`)
 	}, WithMaxResponseBytes(1024), WithMaxRetries(0))
 	if _, err := c.ListAccounts(context.Background()); err == nil || !strings.Contains(err.Error(), "size limit") {
 		t.Errorf("err = %v", err)
@@ -316,7 +316,7 @@ func TestQueryEncoding(t *testing.T) {
 				t.Errorf("%s = %q, want %q", k, q.Get(k), v)
 			}
 		}
-		io.WriteString(w, `{"instrument":"EUR_USD","granularity":"H1","candles":[{"time":"2024-01-02T03:00:00Z","bid":{"o":"1","h":"2","l":"0.5","c":"1.5"},"volume":5,"complete":true}]}`)
+		_, _ = io.WriteString(w, `{"instrument":"EUR_USD","granularity":"H1","candles":[{"time":"2024-01-02T03:00:00Z","bid":{"o":"1","h":"2","l":"0.5","c":"1.5"},"volume":5,"complete":true}]}`)
 	})
 	f, zero := false, 0
 	res, err := c.GetCandles(context.Background(), "EUR_USD", CandlesParams{
@@ -335,7 +335,7 @@ func TestGetTransactionPageRejectsForeignHosts(t *testing.T) {
 		if r.URL.Path != "/v3/accounts/"+testAccount+"/transactions/idrange" || r.URL.Query().Get("from") != "1" {
 			t.Errorf("unexpected request %s", r.URL)
 		}
-		io.WriteString(w, `{"transactions":[{"id":"1","type":"CREATE"}],"lastTransactionID":"1"}`)
+		_, _ = io.WriteString(w, `{"transactions":[{"id":"1","type":"CREATE"}],"lastTransactionID":"1"}`)
 	})
 	for _, u := range []string{
 		"https://evil.example.com/v3/accounts/" + testAccount + "/transactions/idrange?from=1&to=2",

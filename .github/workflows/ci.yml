@@ -1,32 +1,53 @@
+---
 name: CI
-
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   pull_request:
-
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+  workflow_dispatch:
 permissions:
   contents: read
-
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+    working-directory: .
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@v5
-        with:
-          go-version: stable
-      - name: gofmt
-        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
-      - name: go vet
-        run: go vet ./...
-      - name: staticcheck
-        run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
-      - name: test
-        run: go test -race -count=1 ./...
-      - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-      - name: build
-        run: make build && ./bin/oandacli version
+  go-lint-and-scan:
+    permissions:
+      contents: read
+      security-events: write
+    uses: dceoy/gha-for-devops/.github/workflows/go-package-lint-and-scan.yml@main  # zizmor: ignore[unpinned-uses]
+    with:
+      package-path: .
+      go-version: stable
+  go-test:
+    permissions:
+      contents: read
+    uses: dceoy/gha-for-devops/.github/workflows/go-package-test.yml@main  # zizmor: ignore[unpinned-uses]
+    with:
+      working-directory: .
+      go-version: stable
+      race-enabled: true
+      coverage-enabled: true
+  dependabot-auto-merge:
+    if: >
+      github.event_name == 'pull_request' && github.actor == 'dependabot[bot]'
+    needs:
+      - go-lint-and-scan
+      - go-test
+    uses: dceoy/gha-for-devops/.github/workflows/dependabot-auto-merge.yml@main  # zizmor: ignore[unpinned-uses]
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+      checks: read
+      statuses: read
+    with:
+      unconditional: true

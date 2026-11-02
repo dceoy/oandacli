@@ -57,7 +57,7 @@ func (h *harness) app(stdin string) *App {
 func (h *harness) run(args ...string) int { return h.app("").Run(context.Background(), args) }
 
 func okJSON(body string) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, body) }
+	return func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, body) }
 }
 
 func TestReadCommandsPrintRawJSON(t *testing.T) {
@@ -104,10 +104,10 @@ func TestExitCodesAndErrors(t *testing.T) {
 			h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 				if tt.status != 0 {
 					w.WriteHeader(tt.status)
-					io.WriteString(w, `{"errorCode":"E","errorMessage":"boom"}`)
+					_, _ = io.WriteString(w, `{"errorCode":"E","errorMessage":"boom"}`)
 					return
 				}
-				io.WriteString(w, `{}`)
+				_, _ = io.WriteString(w, `{}`)
 			})
 			for k, v := range tt.env {
 				h.env[k] = v
@@ -201,7 +201,7 @@ func TestBodyFileAndTokenFile(t *testing.T) {
 func TestPricingStreamNDJSON(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		for _, l := range []string{`{"type":"HEARTBEAT"}`, `{"type":"PRICE","instrument":"EUR_USD"}`, `{"type":"PRICE", "instrument":"EUR_USD"}`, `{"type":"PRICE","instrument":"EUR_USD"}`} {
-			io.WriteString(w, l+"\n")
+			_, _ = io.WriteString(w, l+"\n")
 			w.(http.Flusher).Flush()
 		}
 		<-r.Context().Done()
@@ -345,7 +345,7 @@ func TestMCPTrading(t *testing.T) {
 func TestMCPStreamIsBounded(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		for i := 0; i < 50; i++ {
-			io.WriteString(w, `{"type":"PRICE","instrument":"EUR_USD"}`+"\n")
+			_, _ = io.WriteString(w, `{"type":"PRICE","instrument":"EUR_USD"}`+"\n")
 		}
 		w.(http.Flusher).Flush()
 		<-r.Context().Done()
