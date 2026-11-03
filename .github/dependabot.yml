@@ -1,0 +1,25 @@
+---
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: daily
+    cooldown:
+      default-days: 1
+    open-pull-requests-limit: 10
+    groups:
+      github-actions-dependencies:
+        patterns:
+          - '*'
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: daily
+    cooldown:
+      default-days: 1
+    open-pull-requests-limit: 10
+    groups:
+      gomod-dependencies:
+        patterns:
+          - '*'

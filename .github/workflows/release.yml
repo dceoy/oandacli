@@ -1,0 +1,27 @@
+---
+name: Release
+on:
+  workflow_dispatch:  # checkov:skip=CKV_GHA_7:workflow_dispatch inputs are required for release parameters
+    inputs:
+      version-bump:
+        required: false
+        type: choice
+        description: SemVer increment for the new tag
+        default: auto
+        options:
+          - auto
+          - major-release
+          - minor-release
+          - patch-release
+permissions:
+  contents: read
+jobs:
+  github-release:
+    permissions:
+      contents: write
+    uses: dceoy/gha-for-devops/.github/workflows/github-release.yml@main  # zizmor: ignore[unpinned-uses]
+    with:
+      create-new-tag: true
+      version-bump: ${{ inputs.version-bump }}
+    secrets:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
