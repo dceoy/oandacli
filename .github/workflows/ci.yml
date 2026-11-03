@@ -36,12 +36,24 @@ jobs:
       go-version: stable
       race-enabled: true
       coverage-enabled: true
+  github-actions-lint-and-scan:
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    uses: dceoy/gha-for-devops/.github/workflows/github-actions-lint-and-scan.yml@main  # zizmor: ignore[unpinned-uses]
+  markdown-lint:
+    permissions:
+      contents: read
+    uses: dceoy/gha-for-devops/.github/workflows/markdown-lint.yml@main  # zizmor: ignore[unpinned-uses]
   dependabot-auto-merge:
     if: >
       github.event_name == 'pull_request' && github.actor == 'dependabot[bot]'
     needs:
       - go-lint-and-scan
       - go-test
+      - github-actions-lint-and-scan
+      - markdown-lint
     uses: dceoy/gha-for-devops/.github/workflows/dependabot-auto-merge.yml@main  # zizmor: ignore[unpinned-uses]
     permissions:
       contents: write

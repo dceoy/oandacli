@@ -22,16 +22,16 @@ make build   # ./bin/oandactl
 
 ## Configuration
 
-| Variable | Purpose |
-| --- | --- |
-| `OANDA_API_TOKEN` | Personal access token. |
-| `OANDA_API_TOKEN_FILE` | Path to a file containing the token. It is preferred over `OANDA_API_TOKEN` and must not be readable by group or others (`chmod 600`). |
-| `OANDA_ACCOUNT_ID` | Default account, e.g. `101-004-1234567-001`. Override it with `--account`. |
-| `OANDA_ENVIRONMENT` | `practice` (default) or `live`. Override it with `--env`. |
-| `OANDA_ALLOW_LIVE` | Must be `true` (or pass `--allow-live`) before any state-changing request is sent to the **live** environment. |
-| `OANDA_READ_ONLY` | `true` refuses every state-changing command. |
-| `OANDA_MAX_ORDER_UNITS` | Rejects orders whose absolute units exceed this value. It must be a positive plain decimal such as `10000`; `NaN`, `Inf`, exponents and `0` are refused, and the comparison is exact. While it is set, orders whose units can't be checked are refused. |
-| `OANDA_API_URL`, `OANDA_STREAM_URL` | Override the base URLs, e.g. for a test server. They must be HTTPS unless the host is loopback. |
+| Variable                            | Purpose                                                                                                                                                                                                                                                 |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OANDA_API_TOKEN`                   | Personal access token.                                                                                                                                                                                                                                  |
+| `OANDA_API_TOKEN_FILE`              | Path to a file containing the token. It is preferred over `OANDA_API_TOKEN` and must not be readable by group or others (`chmod 600`).                                                                                                                  |
+| `OANDA_ACCOUNT_ID`                  | Default account, e.g. `101-004-1234567-001`. Override it with `--account`.                                                                                                                                                                              |
+| `OANDA_ENVIRONMENT`                 | `practice` (default) or `live`. Override it with `--env`.                                                                                                                                                                                               |
+| `OANDA_ALLOW_LIVE`                  | Must be `true` (or pass `--allow-live`) before any state-changing request is sent to the **live** environment.                                                                                                                                          |
+| `OANDA_READ_ONLY`                   | `true` refuses every state-changing command.                                                                                                                                                                                                            |
+| `OANDA_MAX_ORDER_UNITS`             | Rejects orders whose absolute units exceed this value. It must be a positive plain decimal such as `10000`; `NaN`, `Inf`, exponents and `0` are refused, and the comparison is exact. While it is set, orders whose units can't be checked are refused. |
+| `OANDA_API_URL`, `OANDA_STREAM_URL` | Override the base URLs, e.g. for a test server. They must be HTTPS unless the host is loopback.                                                                                                                                                         |
 
 The token is never accepted as a command-line flag, because flags are visible to other users in the process list.
 
@@ -64,15 +64,15 @@ Global flags work on every command: `--account`, `--env`, `--token-file`, `--tim
 
 ### Commands
 
-| Group | Commands |
-| --- | --- |
-| `account` | `list`, `get`, `summary`, `instruments`, `changes`, `configure`\* |
-| `instrument` | `candles`, `order-book`, `position-book` |
-| `pricing` | `get`, `latest-candles`, `stream` |
-| `order` | `list`, `pending`, `get`, `market`\*, `limit`\*, `stop`\*, `market-if-touched`\*, `create`\*, `replace`\*, `cancel`\*, `client-extensions`\* |
-| `trade` | `list`, `open`, `get`, `close`\*, `client-extensions`\*, `orders`\* |
-| `position` | `list`, `open`, `get`, `close`\* |
-| `transaction` | `list`, `get`, `range`, `since`, `stream` |
+| Group         | Commands                                                                                                                                     |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `account`     | `list`, `get`, `summary`, `instruments`, `changes`, `configure`\*                                                                            |
+| `instrument`  | `candles`, `order-book`, `position-book`                                                                                                     |
+| `pricing`     | `get`, `latest-candles`, `stream`                                                                                                            |
+| `order`       | `list`, `pending`, `get`, `market`\*, `limit`\*, `stop`\*, `market-if-touched`\*, `create`\*, `replace`\*, `cancel`\*, `client-extensions`\* |
+| `trade`       | `list`, `open`, `get`, `close`\*, `client-extensions`\*, `orders`\*                                                                          |
+| `position`    | `list`, `open`, `get`, `close`\*                                                                                                             |
+| `transaction` | `list`, `get`, `range`, `since`, `stream`                                                                                                    |
 
 \* State-changing. These are refused in read-only mode, and in the live environment unless `--allow-live` is given.
 
@@ -84,14 +84,14 @@ On failure, stderr gets a single JSON line:
 {"error":{"kind":"api","message":"oanda: HTTP 400 Bad Request [INSUFFICIENT_MARGIN]: ...","statusCode":400,"errorCode":"INSUFFICIENT_MARGIN","requestID":"...","response":{"orderRejectTransaction":{...}},"exitCode":3}}
 ```
 
-| Exit code | Meaning |
-| --- | --- |
-| 0 | Success. A dry run also exits 0. |
-| 1 | Transport, timeout or unexpected error. |
-| 2 | Invalid command or arguments (`kind: usage`). Nothing was sent. |
-| 3 | OANDA returned 4xx (`kind: api`). |
-| 4 | OANDA returned 5xx (`kind: api`). |
-| 5 | Refused by local safety policy (`kind: policy`). Nothing was sent. |
+| Exit code | Meaning                                                            |
+| --------- | ------------------------------------------------------------------ |
+| 0         | Success. A dry run also exits 0.                                   |
+| 1         | Transport, timeout or unexpected error.                            |
+| 2         | Invalid command or arguments (`kind: usage`). Nothing was sent.    |
+| 3         | OANDA returned 4xx (`kind: api`).                                  |
+| 4         | OANDA returned 5xx (`kind: api`).                                  |
+| 5         | Refused by local safety policy (`kind: policy`). Nothing was sent. |
 
 ## Use with AI agents
 
@@ -114,8 +114,8 @@ import "github.com/dceoy/oandactl/oanda"
 
 token, _ := oanda.NewToken(os.Getenv("OANDA_API_TOKEN"))
 client, err := oanda.NewClient(token,
-	oanda.WithEnvironment(oanda.Practice),
-	oanda.WithReadOnly(false),
+ oanda.WithEnvironment(oanda.Practice),
+ oanda.WithReadOnly(false),
 )
 if err != nil { ... }
 
@@ -127,17 +127,17 @@ order.StopLossOnFill = &oanda.StopLossDetails{Distance: "0.0050"}
 res, err := client.CreateOrder(ctx, accountID, order)
 var apiErr *oanda.APIError
 if errors.As(err, &apiErr) {
-	fmt.Println(apiErr.ErrorCode, string(apiErr.Body)) // e.g. orderRejectTransaction
+ fmt.Println(apiErr.ErrorCode, string(apiErr.Body)) // e.g. orderRejectTransaction
 }
 fmt.Println(res.Transaction("orderFillTransaction").Price)
 
 err = client.StreamPricing(ctx, accountID, oanda.PricingStreamParams{Instruments: []string{"EUR_USD"}},
-	func(m oanda.StreamMessage) error {
-		if m.IsHeartbeat() { return nil }
-		p, _ := m.Price()
-		fmt.Println(p.Instrument, p.Bids[0].Price)
-		return nil // or oanda.ErrStopStream to finish
-	})
+ func(m oanda.StreamMessage) error {
+  if m.IsHeartbeat() { return nil }
+  p, _ := m.Price()
+  fmt.Println(p.Instrument, p.Bids[0].Price)
+  return nil // or oanda.ErrStopStream to finish
+ })
 ```
 
 Notes on the SDK:
@@ -148,31 +148,31 @@ Notes on the SDK:
 
 Options:
 
-| Option | Default |
-| --- | --- |
-| `WithEnvironment` | Practice |
-| `WithBaseURLs` | |
-| `WithHTTPClient` | |
-| `WithTimeout` | 30s |
-| `WithRateLimit` | 100 rps, burst 20 |
-| `WithMaxRetries` | 3, GET requests only |
-| `WithMaxResponseBytes` | 32 MiB |
-| `WithStreamStallTimeout` | 30s |
-| `WithReadOnly` | |
-| `WithDryRun` | |
-| `WithLogger` | |
-| `WithUserAgent` | |
+| Option                   | Default              |
+| ------------------------ | -------------------- |
+| `WithEnvironment`        | Practice             |
+| `WithBaseURLs`           |                      |
+| `WithHTTPClient`         |                      |
+| `WithTimeout`            | 30s                  |
+| `WithRateLimit`          | 100 rps, burst 20    |
+| `WithMaxRetries`         | 3, GET requests only |
+| `WithMaxResponseBytes`   | 32 MiB               |
+| `WithStreamStallTimeout` | 30s                  |
+| `WithReadOnly`           |                      |
+| `WithDryRun`             |                      |
+| `WithLogger`             |                      |
+| `WithUserAgent`          |                      |
 
 ## Security model
 
-| Threat | Mitigation |
-| --- | --- |
-| Token disclosure | `oanda.Token` redacts itself in `fmt`, JSON, text and `slog`. The CLI reads it only from the environment or a `0600` file, and logs never include the token or bodies. |
-| Token sent to another host | Only HTTPS (loopback HTTP for tests), TLS ≥ 1.2, and redirects are never followed. `GetTransactionPage` only fetches URLs on the client's own API host. |
-| Injection or path traversal | Account IDs, instruments, order and trade specifiers, transaction IDs, enums, decimals and timestamps are validated, and path segments are escaped. |
-| Duplicate orders | Only idempotent GETs are retried. POST, PUT and PATCH are sent once. |
-| Runaway agents | Practice is the default. Live trading requires explicit opt-in. Read-only mode, dry runs, `OANDA_MAX_ORDER_UNITS`, a client-side rate limit (below OANDA's 120 req/s), `--max-messages`/`--duration` bounds for streams, a 32 MiB response limit and a 1 MiB stream line limit also apply. |
-| Supply chain | No third-party modules. CI runs golangci-lint, gosec, govulncheck, OSV-Scanner, Trivy, Semgrep and CodeQL. |
+| Threat                      | Mitigation                                                                                                                                                                                                                                                                                 |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Token disclosure            | `oanda.Token` redacts itself in `fmt`, JSON, text and `slog`. The CLI reads it only from the environment or a `0600` file, and logs never include the token or bodies.                                                                                                                     |
+| Token sent to another host  | Only HTTPS (loopback HTTP for tests), TLS ≥ 1.2, and redirects are never followed. `GetTransactionPage` only fetches URLs on the client's own API host.                                                                                                                                    |
+| Injection or path traversal | Account IDs, instruments, order and trade specifiers, transaction IDs, enums, decimals and timestamps are validated, and path segments are escaped.                                                                                                                                        |
+| Duplicate orders            | Only idempotent GETs are retried. POST, PUT and PATCH are sent once.                                                                                                                                                                                                                       |
+| Runaway agents              | Practice is the default. Live trading requires explicit opt-in. Read-only mode, dry runs, `OANDA_MAX_ORDER_UNITS`, a client-side rate limit (below OANDA's 120 req/s), `--max-messages`/`--duration` bounds for streams, a 32 MiB response limit and a 1 MiB stream line limit also apply. |
+| Supply chain                | No third-party modules. CI runs golangci-lint, gosec, govulncheck, OSV-Scanner, Trivy, Semgrep and CodeQL.                                                                                                                                                                                 |
 
 ## Development
 

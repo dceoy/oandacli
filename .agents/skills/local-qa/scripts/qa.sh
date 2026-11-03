@@ -22,7 +22,19 @@ gosec ./...
 go test -race -count=1 ./...
 
 # Markdown
-pnpm dlx oxfmt --write './**/*.md'
+npx -y oxfmt --write '**/*.md'
+# Same markdownlint rules as the shared CI workflow (markdown-lint.yml) unless the repo has its own config
+if [[ -f .markdownlint-cli2.jsonc ]]; then
+  git ls-files -z -- '*.md' '*.mdx' | xargs -0 -t npx -y markdownlint-cli2 --fix --config .markdownlint-cli2.jsonc
+else
+  printf '{"config":{"MD013":false,"MD033":false,"MD041":false}}' > .markdownlint-cli2.jsonc
+  set +e
+  git ls-files -z -- '*.md' '*.mdx' | xargs -0 -t npx -y markdownlint-cli2 --fix --config .markdownlint-cli2.jsonc
+  markdownlint_exit_code="${?}"
+  set -e
+  rm -f .markdownlint-cli2.jsonc
+  [[ "${markdownlint_exit_code}" -eq 0 ]] || exit "${markdownlint_exit_code}"
+fi
 
 # GitHub Actions
 uvx zizmor --fix=safe .github/workflows

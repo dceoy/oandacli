@@ -94,13 +94,13 @@ After a real trading command, read the transactions in the response (e.g. `order
 - Success: OANDA's JSON on stdout, exit code `0`. A `--dry-run` prints `{"dryRun":true,"request":{...}}` and exits `0`.
 - Failure: one JSON line on stderr, `{"error":{"kind":...,"message":...,"statusCode":...,"errorCode":...,"response":{...}}}`.
 
-| Exit code | Meaning | What to do |
-| --- | --- | --- |
-| 1 | Transport, timeout or stream error | Retry read-only commands once. Do not blindly retry orders: check `trade open`, `order pending` or `transaction since` first. |
-| 2 | Invalid command or arguments (`usage`) | Fix the flags; nothing was sent. |
-| 3 | OANDA rejected the request (4xx, `api`) | Explain `errorCode`/`errorMessage`; for orders, `response` holds the reject transaction. |
-| 4 | OANDA server error (5xx, `api`) | Retry read-only commands later; check state before retrying orders. |
-| 5 | Refused by local safety policy (`policy`) | Tell the user why. Do not work around it. |
+| Exit code | Meaning                                   | What to do                                                                                                                    |
+| --------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| 1         | Transport, timeout or stream error        | Retry read-only commands once. Do not blindly retry orders: check `trade open`, `order pending` or `transaction since` first. |
+| 2         | Invalid command or arguments (`usage`)    | Fix the flags; nothing was sent.                                                                                              |
+| 3         | OANDA rejected the request (4xx, `api`)   | Explain `errorCode`/`errorMessage`; for orders, `response` holds the reject transaction.                                      |
+| 4         | OANDA server error (5xx, `api`)           | Retry read-only commands later; check state before retrying orders.                                                           |
+| 5         | Refused by local safety policy (`policy`) | Tell the user why. Do not work around it.                                                                                     |
 
 Parse stdout as JSON (for example with `jq`) instead of scraping text. Pass `--pretty` for human-readable output.
 
