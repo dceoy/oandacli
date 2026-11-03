@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dceoy/oandacli/oanda"
+	"github.com/dceoy/oandactl/oanda"
 )
 
 // ParamType is the type of a command parameter.
@@ -26,8 +26,7 @@ const (
 	TTime     ParamType = "time"
 )
 
-// Param is a named command parameter. Parameters are exposed as --kebab-case
-// CLI flags and as snake_case MCP tool arguments.
+// Param is a named command parameter, exposed as a --kebab-case CLI flag.
 type Param struct {
 	Name     string
 	Type     ParamType
@@ -35,11 +34,7 @@ type Param struct {
 	Desc     string
 	Enum     []string
 	Default  any
-	// CLIOnly params (e.g. reading local files) are not exposed over MCP.
-	CLIOnly bool
 }
-
-func (p Param) snake() string { return strings.ReplaceAll(p.Name, "-", "_") }
 
 // Command is one leaf command.
 type Command struct {
@@ -55,11 +50,6 @@ type Command struct {
 
 // Name returns the space-separated command path.
 func (c *Command) Name() string { return strings.Join(c.Path, " ") }
-
-// ToolName returns the MCP tool name.
-func (c *Command) ToolName() string {
-	return "oanda_" + strings.ReplaceAll(strings.Join(c.Path, "_"), "-", "_")
-}
 
 // Env is the execution environment passed to commands.
 type Env struct {
@@ -108,114 +98,59 @@ type PolicyError struct{ Msg string }
 
 func (e *PolicyError) Error() string { return e.Msg }
 
-// convert turns a raw value (string from a flag, or a JSON value from MCP)
+// convert turns a raw flag value (a string, or a bool for boolean flags)
 // into the typed value for p.
 func (p Param) convert(raw any) (any, error) {
 	fail := func(format string, args ...any) error {
-		return usagef("parameter %s: %s", p.Name, fmt.Sprintf(format, args...))
+		return usagef("parameter --%s: %s", p.Name, fmt.Sprintf(format, args...))
+	}
+	if p.Type == TBool {
+		b, ok := raw.(bool)
+		if !ok {
+			return nil, fail("expected true or false")
+		}
+		return b, nil
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return nil, fail("expected a string value")
 	}
 	var v any
 	switch p.Type {
 	case TString:
-		s, ok := raw.(string)
-		if !ok {
-			return nil, fail("expected a string")
-		}
 		if len(s) > 4096 {
 			return nil, fail("value too long")
 		}
 		v = s
 	case TInt:
-		switch x := raw.(type) {
-		case string:
-			n, err := strconv.Atoi(x)
-			if err != nil {
-				return nil, fail("expected an integer")
-			}
-			v = n
-		case float64:
-			if x != float64(int(x)) {
-				return nil, fail("expected an integer")
-			}
-			v = int(x)
-		default:
+		n, err := strconv.Atoi(s)
+		if err != nil {
 			return nil, fail("expected an integer")
 		}
-	case TBool:
-		switch x := raw.(type) {
-		case bool:
-			v = x
-		case string:
-			b, err := strconv.ParseBool(x)
-			if err != nil {
-				return nil, fail("expected true or false")
-			}
-			v = b
-		default:
-			return nil, fail("expected a boolean")
-		}
+		v = n
 	case TStrings:
-		var out []string
-		switch x := raw.(type) {
-		case string:
-			out = splitList(x)
-		case []string:
-			for _, s := range x {
-				out = append(out, splitList(s)...)
-			}
-		case []any:
-			for _, e := range x {
-				s, ok := e.(string)
-				if !ok {
-					return nil, fail("expected an array of strings")
-				}
-				out = append(out, splitList(s)...)
-			}
-		default:
-			return nil, fail("expected a list of strings")
-		}
+		out := splitList(s)
 		if len(out) > 1000 {
 			return nil, fail("too many values")
 		}
-		for _, s := range out {
-			if len(p.Enum) > 0 && !slices.Contains(p.Enum, s) {
-				return nil, fail("%q is not one of %s", s, strings.Join(p.Enum, ", "))
+		for _, e := range out {
+			if len(p.Enum) > 0 && !slices.Contains(p.Enum, e) {
+				return nil, fail("%q is not one of %s", e, strings.Join(p.Enum, ", "))
 			}
 		}
 		return out, nil
 	case TJSON:
-		var b []byte
-		if s, ok := raw.(string); ok {
-			b = []byte(s)
-		} else {
-			var err error
-			if b, err = json.Marshal(raw); err != nil {
-				return nil, fail("%v", err)
-			}
-		}
-		if !json.Valid(b) || !strings.HasPrefix(strings.TrimSpace(string(b)), "{") {
+		if !json.Valid([]byte(s)) || !strings.HasPrefix(strings.TrimSpace(s), "{") {
 			return nil, fail("expected a JSON object")
 		}
-		v = json.RawMessage(b)
+		v = json.RawMessage(s)
 	case TDuration:
-		s, ok := raw.(string)
-		if !ok {
-			if f, isNum := raw.(float64); isNum {
-				s = strconv.FormatFloat(f, 'f', -1, 64) + "s"
-			} else {
-				return nil, fail("expected a duration such as 30s")
-			}
-		}
 		d, err := time.ParseDuration(s)
 		if err != nil || d < 0 {
 			return nil, fail("expected a duration such as 30s or 5m")
 		}
 		v = d
 	case TTime:
-		s, ok := raw.(string)
-		if !ok {
-			return nil, fail("expected an RFC 3339 timestamp")
-		}
 		t, err := time.Parse(time.RFC3339Nano, s)
 		if err != nil {
 			return nil, fail("expected an RFC 3339 timestamp such as 2024-01-02T15:04:05Z")
@@ -224,8 +159,8 @@ func (p Param) convert(raw any) (any, error) {
 	default:
 		return nil, fail("unsupported type %s", p.Type)
 	}
-	if s, ok := v.(string); ok && len(p.Enum) > 0 && !slices.Contains(p.Enum, s) {
-		return nil, fail("%q is not one of %s", s, strings.Join(p.Enum, ", "))
+	if str, ok := v.(string); ok && len(p.Enum) > 0 && !slices.Contains(p.Enum, str) {
+		return nil, fail("%q is not one of %s", str, strings.Join(p.Enum, ", "))
 	}
 	return v, nil
 }
@@ -241,11 +176,8 @@ func splitList(s string) []string {
 }
 
 // finalize applies defaults and checks required parameters.
-func finalize(cmd *Command, v map[string]any, includeCLIOnly bool) (*Args, error) {
+func finalize(cmd *Command, v map[string]any) (*Args, error) {
 	for _, p := range cmd.Params {
-		if p.CLIOnly && !includeCLIOnly {
-			continue
-		}
 		if _, ok := v[p.Name]; ok {
 			continue
 		}
@@ -260,50 +192,4 @@ func finalize(cmd *Command, v map[string]any, includeCLIOnly bool) (*Args, error
 		}
 	}
 	return &Args{v: v}, nil
-}
-
-// JSONSchema returns the JSON Schema of the command's MCP input.
-func (c *Command) JSONSchema(extra ...Param) map[string]any {
-	props := map[string]any{}
-	required := []string{}
-	for _, p := range append(slices.Clone(c.Params), extra...) {
-		if p.CLIOnly {
-			continue
-		}
-		s := map[string]any{"description": p.Desc}
-		switch p.Type {
-		case TStrings:
-			item := map[string]any{"type": "string"}
-			if len(p.Enum) > 0 {
-				item["enum"] = p.Enum
-			}
-			s["type"] = "array"
-			s["items"] = item
-		case TJSON:
-			s["type"] = "object"
-		case TDuration:
-			s["type"] = "string"
-			s["description"] = p.Desc + " (Go duration, e.g. 30s, 5m)"
-		case TTime:
-			s["type"] = "string"
-			s["format"] = "date-time"
-		default:
-			s["type"] = string(p.Type)
-		}
-		if len(p.Enum) > 0 && p.Type != TStrings {
-			s["enum"] = p.Enum
-		}
-		if p.Default != nil {
-			s["default"] = p.Default
-		}
-		props[p.snake()] = s
-		if p.Required && p.Default == nil {
-			required = append(required, p.snake())
-		}
-	}
-	schema := map[string]any{"type": "object", "properties": props, "additionalProperties": false}
-	if len(required) > 0 {
-		schema["required"] = required
-	}
-	return schema
 }

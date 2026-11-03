@@ -1,4 +1,4 @@
-// Package cli implements the oandacli command-line interface and MCP server.
+// Package cli implements the oandactl command-line interface.
 package cli
 
 import (
@@ -19,10 +19,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dceoy/oandacli/oanda"
+	"github.com/dceoy/oandactl/oanda"
 )
 
-// Version is set at build time with -ldflags "-X github.com/dceoy/oandacli/internal/cli.Version=...".
+// Version is set at build time with -ldflags "-X github.com/dceoy/oandactl/internal/cli.Version=...".
 var Version = "dev"
 
 // Exit codes.
@@ -121,7 +121,7 @@ func (a *App) Run(ctx context.Context, args []string) int {
 			return ExitOK
 		}
 		if len(rest) > 0 && rest[0] != "-h" && rest[0] != "--help" && rest[0] != "-help" {
-			return a.fail(usagef("flags must follow the command, e.g. 'oandacli account summary %s'", rest[0]))
+			return a.fail(usagef("flags must follow the command, e.g. 'oandactl account summary %s'", rest[0]))
 		}
 		a.printUsage(a.Stdout, cmds, nil)
 		if len(rest) == 0 {
@@ -138,8 +138,6 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		return ExitOK
 	case "schema":
 		return a.writeJSON(a.schema(cmds))
-	case "mcp":
-		return a.runMCP(ctx, cmds, rest)
 	}
 
 	cmd := find(cmds, path)
@@ -151,7 +149,7 @@ func (a *App) Run(ctx context.Context, args []string) int {
 			}
 			return ExitUsage
 		}
-		return a.fail(usagef("unknown command %q; run 'oandacli help'", strings.Join(path, " ")))
+		return a.fail(usagef("unknown command %q; run 'oandactl help'", strings.Join(path, " ")))
 	}
 
 	var g globals
@@ -216,13 +214,12 @@ func (a *App) Run(ctx context.Context, args []string) int {
 			return a.fail(err)
 		}
 	}
-	args2, err := finalize(cmd, values, true)
+	args2, err := finalize(cmd, values)
 	if err != nil {
 		return a.fail(err)
 	}
 
-	cfg := runConfig{globals: g}
-	env, err := a.newEnv(cmd, cfg)
+	env, err := a.newEnv(cmd, g)
 	if err != nil {
 		return a.fail(err)
 	}
@@ -254,7 +251,7 @@ func (a *App) readBodyFile(path string) ([]byte, error) {
 	if path == "-" {
 		r = a.Stdin
 	} else {
-		// The path is chosen by the local user; --body-file is never exposed over MCP.
+		// The path is chosen by the local user running the command.
 		f, err := os.Open(filepath.Clean(path)) // #nosec G304 -- user-selected input file
 		if err != nil {
 			return nil, usagef("cannot read --body-file: %v", err)
@@ -272,18 +269,8 @@ func (a *App) readBodyFile(path string) ([]byte, error) {
 	return b, nil
 }
 
-type runConfig struct {
-	globals
-	// denyMutations, when set, refuses every state-changing command with
-	// this message (used by the MCP server without --allow-trading).
-	denyMutations string
-	// base, when set, is a long-lived client whose transport and rate limiter
-	// are shared by every command (used by the MCP server).
-	base *oanda.Client
-}
-
 // newEnv builds the API client and applies the safety policy for cmd.
-func (a *App) newEnv(cmd *Command, cfg runConfig) (*Env, error) {
+func (a *App) newEnv(cmd *Command, cfg globals) (*Env, error) {
 	env := &Env{}
 	if v := strings.TrimSpace(a.Getenv(EnvMaxOrderUnits)); v != "" {
 		limit, err := parseUnitLimit(v)
@@ -301,8 +288,6 @@ func (a *App) newEnv(cmd *Command, cfg runConfig) (*Env, error) {
 	}
 	if cmd.Mutating {
 		switch {
-		case cfg.denyMutations != "":
-			return nil, &PolicyError{Msg: cfg.denyMutations}
 		case cfg.readOnly:
 			return nil, &PolicyError{Msg: "read-only mode is enabled (--read-only / " + EnvReadOnly + "); state-changing commands are refused"}
 		case oenv == oanda.Live && !cfg.allowLive && !cfg.dryRun:
@@ -318,11 +303,6 @@ func (a *App) newEnv(cmd *Command, cfg runConfig) (*Env, error) {
 			return nil, usagef("%v", err)
 		}
 	}
-	if cfg.base != nil {
-		// Defense in depth: the client itself refuses writes for read-only commands.
-		env.Client = cfg.base.Derive(!cmd.Mutating, cfg.dryRun)
-		return env, nil
-	}
 	c, err := a.newClient(cfg, oenv, !cmd.Mutating)
 	if err != nil {
 		return nil, err
@@ -332,7 +312,7 @@ func (a *App) newEnv(cmd *Command, cfg runConfig) (*Env, error) {
 }
 
 // newClient builds an API client from the global configuration.
-func (a *App) newClient(cfg runConfig, oenv oanda.Environment, readOnly bool) (*oanda.Client, error) {
+func (a *App) newClient(cfg globals, oenv oanda.Environment, readOnly bool) (*oanda.Client, error) {
 	token, err := a.loadToken(cfg.tokenFile)
 	if err != nil {
 		if !cfg.dryRun {
@@ -344,7 +324,7 @@ func (a *App) newClient(cfg runConfig, oenv oanda.Environment, readOnly bool) (*
 		oanda.WithEnvironment(oenv),
 		oanda.WithBaseURLs(a.Getenv(EnvAPIURL), a.Getenv(EnvStreamURL)),
 		oanda.WithTimeout(cfg.timeout),
-		oanda.WithUserAgent("oandacli/" + Version),
+		oanda.WithUserAgent("oandactl/" + Version),
 		// Defense in depth: the client itself refuses writes for read-only commands.
 		oanda.WithReadOnly(readOnly),
 		oanda.WithDryRun(cfg.dryRun),
@@ -524,7 +504,7 @@ func (a *App) fail(err error) int {
 }
 
 func (a *App) printUsage(w io.Writer, cmds []*Command, prefix []string) {
-	_, _ = fmt.Fprintf(w, "oandacli %s - CLI for the OANDA REST-V20 API\n\nUsage:\n  oandacli <group> <command> [--flags]\n\nCommands:\n", Version)
+	_, _ = fmt.Fprintf(w, "oandactl %s - CLI for the OANDA REST-V20 API\n\nUsage:\n  oandactl <group> <command> [--flags]\n\nCommands:\n", Version)
 	for _, c := range cmds {
 		if len(prefix) > 0 && (len(c.Path) < len(prefix) || !slices.Equal(c.Path[:len(prefix)], prefix)) {
 			continue
@@ -537,7 +517,6 @@ func (a *App) printUsage(w io.Writer, cmds []*Command, prefix []string) {
 	}
 	if len(prefix) == 0 {
 		_, _ = fmt.Fprint(w, `  schema                             Print a JSON description of all commands
-  mcp                                Run as an MCP (Model Context Protocol) server on stdio
   version                            Print the version
 
 Configuration (environment):
@@ -550,13 +529,13 @@ Configuration (environment):
 
 Output is JSON on stdout; errors are JSON on stderr.
 Exit codes: 0 ok, 1 error, 2 usage, 3 API 4xx, 4 API 5xx, 5 refused by policy.
-Run 'oandacli <group> <command> --help' for flags.
+Run 'oandactl <group> <command> --help' for flags.
 `)
 	}
 }
 
 func (a *App) printCommandHelp(w io.Writer, cmd *Command, fs *flag.FlagSet) {
-	_, _ = fmt.Fprintf(w, "%s\n\nUsage:\n  oandacli %s [--flags]\n\n", cmd.Summary, cmd.Name())
+	_, _ = fmt.Fprintf(w, "%s\n\nUsage:\n  oandactl %s [--flags]\n\n", cmd.Summary, cmd.Name())
 	if cmd.Mutating {
 		_, _ = fmt.Fprint(w, "This command changes account state. It is refused in read-only mode and,\nin the live environment, unless --allow-live is given.\n\n")
 	}
@@ -614,23 +593,29 @@ func typeHint(t ParamType) string {
 
 // schema describes every command for agents and tooling.
 func (a *App) schema(cmds []*Command) any {
+	type flag struct {
+		Type        ParamType `json:"type"`
+		Required    bool      `json:"required"`
+		Description string    `json:"description"`
+		Enum        []string  `json:"enum,omitempty"`
+		Default     any       `json:"default,omitempty"`
+	}
 	type entry struct {
-		Command     string         `json:"command"`
-		Tool        string         `json:"tool"`
-		Description string         `json:"description"`
-		Mutating    bool           `json:"mutating"`
-		Stream      bool           `json:"stream"`
-		Account     bool           `json:"requiresAccount"`
-		Flags       map[string]any `json:"flags"`
-		Input       map[string]any `json:"inputSchema"`
+		Command     string          `json:"command"`
+		Usage       string          `json:"usage"`
+		Description string          `json:"description"`
+		Mutating    bool            `json:"mutating"`
+		Stream      bool            `json:"stream"`
+		Account     bool            `json:"requiresAccount"`
+		Flags       map[string]flag `json:"flags"`
 	}
 	out := []entry{}
 	for _, c := range cmds {
-		flags := map[string]any{}
+		flags := map[string]flag{}
 		for _, p := range c.Params {
-			flags["--"+p.Name] = map[string]any{"type": p.Type, "required": p.Required && p.Default == nil, "description": p.Desc, "enum": p.Enum, "default": p.Default}
+			flags["--"+p.Name] = flag{Type: p.Type, Required: p.Required && p.Default == nil, Description: p.Desc, Enum: p.Enum, Default: p.Default}
 		}
-		out = append(out, entry{Command: c.Name(), Tool: c.ToolName(), Description: c.Summary, Mutating: c.Mutating, Stream: c.Stream, Account: c.Account, Flags: flags, Input: c.JSONSchema(mcpExtraParams(c)...)})
+		out = append(out, entry{Command: c.Name(), Usage: "oandactl " + c.Name() + " [--flags]", Description: c.Summary, Mutating: c.Mutating, Stream: c.Stream, Account: c.Account, Flags: flags})
 	}
-	return map[string]any{"name": "oandacli", "version": Version, "commands": out}
+	return map[string]any{"name": "oandactl", "version": Version, "commands": out}
 }

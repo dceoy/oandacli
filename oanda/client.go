@@ -323,15 +323,6 @@ func NewClient(token Token, opts ...Option) (*Client, error) {
 	return c, nil
 }
 
-// Derive returns a copy of c with the given read-only and dry-run settings.
-// The copy shares c's HTTP transport (connection pool) and rate limiter, so
-// many short-lived derived clients behave like one client towards OANDA.
-func (c *Client) Derive(readOnly, dryRun bool) *Client {
-	cp := *c
-	cp.readOnly, cp.dryRun = readOnly, dryRun
-	return &cp
-}
-
 // Environment returns the environment the client was created for.
 func (c *Client) Environment() Environment { return c.env }
 

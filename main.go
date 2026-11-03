@@ -1,4 +1,4 @@
-// Command oandacli is a CLI and MCP server for the OANDA REST-V20 API.
+// Command oandactl is a CLI for the OANDA REST-V20 API.
 package main
 
 import (
@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/dceoy/oandacli/internal/cli"
+	"github.com/dceoy/oandactl/internal/cli"
 )
 
 func main() {

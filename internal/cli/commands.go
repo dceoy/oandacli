@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/dceoy/oandacli/oanda"
+	"github.com/dceoy/oandactl/oanda"
 )
 
 func strs[T ~string](list []T) []string {
@@ -51,7 +51,7 @@ var (
 	pGSLDist    = Param{Name: "gsl-distance", Type: TString, Desc: "Guaranteed stop-loss distance in price units"}
 
 	pBody     = Param{Name: "body", Type: TJSON, Desc: `Order request JSON, either {"order":{...}} or the order object itself`}
-	pBodyFile = Param{Name: "body-file", Type: TString, Desc: "Read the order request JSON from a file (- for stdin)", CLIOnly: true}
+	pBodyFile = Param{Name: "body-file", Type: TString, Desc: "Read the order request JSON from a file (- for stdin)"}
 
 	pMaxMessages = Param{Name: "max-messages", Type: TInt, Desc: "Stop after this many messages (0 = unlimited)"}
 	pDuration    = Param{Name: "duration", Type: TDuration, Desc: "Stop after this long (0 = unlimited)"}

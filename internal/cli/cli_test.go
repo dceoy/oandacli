@@ -1,21 +1,17 @@
 package cli
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 const testAccount = "101-004-1234567-001"
@@ -24,7 +20,6 @@ type harness struct {
 	srv    *httptest.Server
 	env    map[string]string
 	calls  atomic.Int32
-	conns  atomic.Int32 // new TCP connections accepted by the server
 	last   atomic.Pointer[http.Request]
 	body   atomic.Pointer[[]byte]
 	stdout bytes.Buffer
@@ -34,19 +29,13 @@ type harness struct {
 func newHarness(t *testing.T, respond func(w http.ResponseWriter, r *http.Request)) *harness {
 	t.Helper()
 	h := &harness{}
-	h.srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.calls.Add(1)
 		b, _ := io.ReadAll(r.Body)
 		h.last.Store(r)
 		h.body.Store(&b)
 		respond(w, r)
 	}))
-	h.srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
-		if s == http.StateNew {
-			h.conns.Add(1)
-		}
-	}
-	h.srv.Start()
 	t.Cleanup(h.srv.Close)
 	h.env = map[string]string{
 		EnvToken:     "test-token",
@@ -95,6 +84,7 @@ func TestExitCodesAndErrors(t *testing.T) {
 		wantCall bool
 	}{
 		{name: "unknown command", args: []string{"nope"}, wantCode: ExitUsage, wantKind: "usage"},
+		{name: "no mcp server", args: []string{"mcp"}, wantCode: ExitUsage, wantKind: "usage"},
 		{name: "missing required", args: []string{"position", "get"}, wantCode: ExitUsage, wantKind: "usage"},
 		{name: "positional arg", args: []string{"position", "get", "EUR_USD"}, wantCode: ExitUsage, wantKind: "usage"},
 		{name: "bad enum", args: []string{"instrument", "candles", "--instrument", "EUR_USD", "--granularity", "X"}, wantCode: ExitUsage, wantKind: "usage"},
@@ -240,10 +230,12 @@ func TestSchemaListsAllCommands(t *testing.T) {
 		t.Fatal(code)
 	}
 	var s struct {
+		Name     string `json:"name"`
 		Commands []struct {
-			Command string         `json:"command"`
-			Tool    string         `json:"tool"`
-			Input   map[string]any `json:"inputSchema"`
+			Command  string                     `json:"command"`
+			Usage    string                     `json:"usage"`
+			Mutating bool                       `json:"mutating"`
+			Flags    map[string]json.RawMessage `json:"flags"`
 		} `json:"commands"`
 	}
 	if err := json.Unmarshal(h.stdout.Bytes(), &s); err != nil {
@@ -252,225 +244,37 @@ func TestSchemaListsAllCommands(t *testing.T) {
 	if len(s.Commands) != len(Commands()) {
 		t.Errorf("schema has %d commands, want %d", len(s.Commands), len(Commands()))
 	}
-	for _, c := range s.Commands {
-		if _, ok := c.Input["properties"].(map[string]any)["body_file"]; ok {
-			t.Errorf("%s exposes body_file in its input schema", c.Command)
+	if s.Name != "oandactl" {
+		t.Errorf("name = %q", s.Name)
+	}
+	byName := map[string]int{}
+	for i, c := range s.Commands {
+		byName[c.Command] = i
+		if c.Usage != "oandactl "+c.Command+" [--flags]" {
+			t.Errorf("%s usage = %q", c.Command, c.Usage)
 		}
 	}
-}
-
-// mcpSession runs the MCP server over the given requests and returns the
-// responses keyed by id.
-func mcpSession(t *testing.T, h *harness, flags []string, reqs ...string) map[string]map[string]any {
-	t.Helper()
-	app := h.app(strings.Join(reqs, "\n") + "\n")
-	if code := app.Run(context.Background(), append([]string{"mcp"}, flags...)); code != ExitOK {
-		t.Fatalf("mcp exit %d: %s", code, h.stderr.String())
+	market, ok := byName["order market"]
+	if !ok || !s.Commands[market].Mutating {
+		t.Fatalf("order market missing or not marked mutating")
 	}
-	out := map[string]map[string]any{}
-	sc := bufio.NewScanner(&h.stdout)
-	for sc.Scan() {
-		var m map[string]any
-		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
-			t.Fatalf("bad response line %q: %v", sc.Text(), err)
-		}
-		id, _ := json.Marshal(m["id"])
-		out[string(id)] = m
-	}
-	return out
-}
-
-func toolNames(resp map[string]any) map[string]bool {
-	names := map[string]bool{}
-	for _, tool := range resp["result"].(map[string]any)["tools"].([]any) {
-		names[tool.(map[string]any)["name"].(string)] = true
-	}
-	return names
-}
-
-func toolText(t *testing.T, resp map[string]any) (string, bool) {
-	t.Helper()
-	res, ok := resp["result"].(map[string]any)
-	if !ok {
-		t.Fatalf("no result: %v", resp)
-	}
-	return res["content"].([]any)[0].(map[string]any)["text"].(string), res["isError"].(bool)
-}
-
-func TestMCPReadOnlyByDefault(t *testing.T) {
-	h := newHarness(t, okJSON(`{"accounts":[{"id":"1"}]}`))
-	resps := mcpSession(t, h, nil,
-		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}`,
-		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
-		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
-		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"oanda_account_list","arguments":{}}}`,
-		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"oanda_order_market","arguments":{"instrument":"EUR_USD","units":"1"}}}`,
-		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"oanda_position_get","arguments":{"instrument":"EUR_USD","bogus":1}}}`,
-		`{"jsonrpc":"2.0","id":6,"method":"nope"}`,
-		`not json`,
-	)
-	if v := resps["1"]["result"].(map[string]any)["protocolVersion"]; v != "2025-03-26" {
-		t.Errorf("protocolVersion = %v", v)
-	}
-	names := toolNames(resps["2"])
-	if !names["oanda_account_list"] || !names["oanda_pricing_stream"] || names["oanda_order_market"] || names["oanda_trade_close"] {
-		t.Errorf("unexpected tool set: %v", names)
-	}
-	if text, isErr := toolText(t, resps["3"]); isErr || text != `{"accounts":[{"id":"1"}]}` {
-		t.Errorf("account_list = %s (isError %v)", text, isErr)
-	}
-	if resps["4"]["error"] == nil {
-		t.Errorf("trading tool callable without --allow-trading: %v", resps["4"])
-	}
-	if text, isErr := toolText(t, resps["5"]); !isErr || !strings.Contains(text, "unknown argument") {
-		t.Errorf("unknown argument not rejected: %s", text)
-	}
-	if resps["6"]["error"].(map[string]any)["code"].(float64) != -32601 {
-		t.Errorf("unknown method: %v", resps["6"])
-	}
-	if resps["null"]["error"] == nil {
-		t.Errorf("parse error not reported")
-	}
-	if h.calls.Load() != 1 {
-		t.Errorf("server calls = %d, want 1", h.calls.Load())
+	if _, ok := s.Commands[market].Flags["--units"]; !ok {
+		t.Errorf("order market flags lack --units: %v", s.Commands[market].Flags)
 	}
 }
 
-func TestMCPTrading(t *testing.T) {
-	h := newHarness(t, okJSON(`{"orderCreateTransaction":{"id":"3","type":"MARKET_ORDER"}}`))
-	resps := mcpSession(t, h, []string{"--allow-trading"},
-		`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`,
-		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"oanda_order_market","arguments":{"instrument":"EUR_USD","units":"10","dry_run":true}}}`,
-	)
-	if !toolNames(resps["1"])["oanda_order_market"] {
-		t.Error("trading tools not exposed with --allow-trading")
-	}
-	text, isErr := toolText(t, resps["2"])
-	if isErr || !strings.Contains(text, `"dryRun":true`) {
-		t.Errorf("dry run = %s", text)
-	}
-	if h.calls.Load() != 0 {
-		t.Error("dry run contacted the server")
-	}
-
-	// Live environment without --allow-live must not expose trading tools.
-	h.env[EnvEnvironment] = "live"
-	resps = mcpSession(t, h, []string{"--allow-trading"}, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
-	if toolNames(resps["1"])["oanda_order_market"] {
-		t.Error("trading tools exposed in live without --allow-live")
-	}
-}
-
-func TestMCPStreamIsBounded(t *testing.T) {
+func TestPricingStreamReportsFailureAfterPartialOutput(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
-		for i := 0; i < 50; i++ {
-			_, _ = io.WriteString(w, `{"type":"PRICE","instrument":"EUR_USD"}`+"\n")
-		}
-		w.(http.Flusher).Flush()
-		<-r.Context().Done()
+		_, _ = io.WriteString(w, `{"type":"PRICE","instrument":"EUR_USD"}`+"\n")
 	})
-	resps := mcpSession(t, h, nil,
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"oanda_pricing_stream","arguments":{"instruments":["EUR_USD"]}}}`,
-	)
-	text, isErr := toolText(t, resps["1"])
-	var out struct {
-		Count int `json:"count"`
+	code := h.run("pricing", "stream", "--instruments", "EUR_USD", "--max-messages", "5")
+	if code != ExitError {
+		t.Fatalf("exit = %d, want %d", code, ExitError)
 	}
-	if isErr || json.Unmarshal([]byte(text), &out) != nil || out.Count != mcpDefaultMessages {
-		t.Errorf("stream result = %s", text)
+	if got := strings.Count(h.stdout.String(), "\n"); got != 1 {
+		t.Errorf("stdout lines = %d, want 1: %q", got, h.stdout.String())
 	}
-}
-
-func TestMCPServerDryRunCannotBeDisabledPerCall(t *testing.T) {
-	h := newHarness(t, okJSON(`{}`))
-	resps := mcpSession(t, h, []string{"--allow-trading", "--dry-run"},
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"oanda_order_market","arguments":{"instrument":"EUR_USD","units":"10","dry_run":false}}}`,
-		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"oanda_trade_close","arguments":{"trade":"1"}}}`,
-	)
-	for _, id := range []string{"1", "2"} {
-		if text, isErr := toolText(t, resps[id]); isErr || !strings.Contains(text, `"dryRun":true`) {
-			t.Errorf("call %s = %s", id, text)
-		}
+	if !strings.Contains(h.stderr.String(), "stream closed by server") {
+		t.Errorf("stderr = %s", h.stderr.String())
 	}
-	if h.calls.Load() != 0 {
-		t.Errorf("server received %d requests despite --dry-run", h.calls.Load())
-	}
-}
-
-func TestMCPToolCallsShareConnections(t *testing.T) {
-	h := newHarness(t, okJSON(`{"accounts":[]}`))
-	reqs := make([]string, 0, 5)
-	for i := 1; i <= 5; i++ {
-		reqs = append(reqs, `{"jsonrpc":"2.0","id":`+string(rune('0'+i))+`,"method":"tools/call","params":{"name":"oanda_account_list","arguments":{}}}`)
-	}
-	// Send the calls one at a time so each can reuse the idle connection.
-	app := h.app("")
-	pr, pw := io.Pipe()
-	app.Stdin = pr
-	out := make(chan []string)
-	var stdout syncBuffer
-	app.Stdout = &stdout
-	done := make(chan int)
-	go func() { done <- app.Run(context.Background(), []string{"mcp"}) }()
-	go func() {
-		var got []string
-		for _, r := range reqs {
-			_, _ = io.WriteString(pw, r+"\n")
-			for stdout.Lines() <= len(got) {
-				time.Sleep(time.Millisecond)
-			}
-			got = append(got, r)
-		}
-		_ = pw.Close()
-		out <- got
-	}()
-	<-out
-	if code := <-done; code != ExitOK {
-		t.Fatalf("exit %d: %s", code, h.stderr.String())
-	}
-	if h.calls.Load() != 5 {
-		t.Fatalf("calls = %d, want 5", h.calls.Load())
-	}
-	if n := h.conns.Load(); n != 1 {
-		t.Errorf("server saw %d new connections for 5 sequential tool calls, want 1", n)
-	}
-}
-
-func TestMCPStopsOnContextCancelWhileStdinIdle(t *testing.T) {
-	h := newHarness(t, okJSON(`{}`))
-	app := h.app("")
-	pr, pw := io.Pipe()
-	defer func() { _ = pw.Close() }()
-	app.Stdin = pr
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan int, 1)
-	go func() { done <- app.Run(ctx, []string{"mcp"}) }()
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-	select {
-	case code := <-done:
-		if code != ExitOK {
-			t.Errorf("exit %d: %s", code, h.stderr.String())
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("MCP server did not stop after context cancellation")
-	}
-}
-
-// syncBuffer is a goroutine-safe bytes.Buffer that counts written lines.
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *syncBuffer) Lines() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return bytes.Count(b.buf.Bytes(), []byte("\n"))
 }
