@@ -44,7 +44,6 @@ type Command struct {
 	Account  bool // requires an account ID
 	Mutating bool // changes account state
 	Stream   bool // emits NDJSON messages
-	Local    bool // does not need an API client
 	Run      func(ctx context.Context, e *Env, a *Args) (any, error)
 }
 

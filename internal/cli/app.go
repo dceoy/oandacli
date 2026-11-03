@@ -279,9 +279,6 @@ func (a *App) newEnv(cmd *Command, cfg globals) (*Env, error) {
 		}
 		env.Policy.MaxOrderUnits = limit
 	}
-	if cmd.Local {
-		return env, nil
-	}
 	oenv, err := oanda.ParseEnvironment(cfg.env)
 	if err != nil {
 		return nil, usagef("%v", err)
