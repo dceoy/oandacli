@@ -61,6 +61,14 @@ oandactl order pending                                     # pending orders
 oandactl transaction since --id 6410 --type ORDER_FILL     # transactions after an ID
 ```
 
+### Pacing
+
+OANDA allows at most 2 new connections per second per client, separate from its 120 requests/s limit. Every `oandactl` invocation opens its own connection and exits, so the CLI's in-process rate limiter cannot pace separate invocations.
+
+- Run `oandactl` commands one after another, never in parallel, and leave at least 1 second between invocations (for example `sleep 1`). Prefer one command that fetches several items (`--instruments EUR_USD,USD_JPY`, `pricing latest-candles --specs ...`) over many separate calls.
+- Never retry a state-changing command automatically. If a write fails or times out, check the account state first (`oandactl order pending`, `oandactl trade open`, `oandactl transaction since --id <ID>`) and ask the user before repeating it.
+- For continuous data, use a bounded stream (`--max-messages` / `--duration`) instead of polling in a loop.
+
 Instrument names use the `BASE_QUOTE` form in upper case, e.g. `EUR_USD`, `XAU_USD`, `SPX500_USD`. Granularities: `S5` … `M1`, `M5`, `M15`, `M30`, `H1`, `H4`, `D`, `W`, `M`. Times are RFC 3339, e.g. `2026-01-02T15:04:05Z`.
 
 ## Trading workflows (only on explicit user request)

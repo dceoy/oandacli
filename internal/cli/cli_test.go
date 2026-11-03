@@ -94,6 +94,8 @@ func TestExitCodesAndErrors(t *testing.T) {
 		{name: "api 404", args: []string{"order", "get", "--order", "99"}, status: 404, wantCode: ExitAPIClient, wantKind: "api", wantCall: true},
 		{name: "api 500", args: []string{"order", "cancel", "--order", "99"}, status: 500, wantCode: ExitAPIServer, wantKind: "api", wantCall: true},
 		{name: "read-only refuses trading", env: map[string]string{EnvReadOnly: "true"}, args: []string{"order", "cancel", "--order", "1"}, wantCode: ExitPolicy, wantKind: "policy"},
+		{name: "read-only env cannot be revoked by flag", env: map[string]string{EnvReadOnly: "true"}, args: []string{"order", "cancel", "--order", "1", "--read-only=false"}, wantCode: ExitPolicy, wantKind: "policy"},
+		{name: "max units limit whitespace only", env: map[string]string{EnvMaxOrderUnits: " "}, args: []string{"order", "market", "--instrument", "EUR_USD", "--units", "1"}, wantCode: ExitUsage, wantKind: "usage"},
 		{name: "live refused without allow", env: map[string]string{EnvEnvironment: "live"}, args: []string{"trade", "close", "--trade", "1"}, wantCode: ExitPolicy, wantKind: "policy"},
 		{name: "live allowed with flag", env: map[string]string{EnvEnvironment: "live"}, args: []string{"trade", "close", "--trade", "1", "--allow-live"}, wantCode: ExitOK, wantCall: true},
 		{name: "max units", env: map[string]string{EnvMaxOrderUnits: "1000"}, args: []string{"order", "market", "--instrument", "EUR_USD", "--units", "-5000"}, wantCode: ExitPolicy, wantKind: "policy"},

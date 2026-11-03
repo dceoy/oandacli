@@ -91,7 +91,9 @@ func (a *App) registerGlobals(fs *flag.FlagSet, g *globals) {
 	fs.BoolVar(&g.compact, "compact", false, "Compact JSON output")
 	fs.BoolVar(&g.dryRun, "dry-run", false, "Print the request that would be sent instead of sending it")
 	fs.BoolVar(&g.allowLive, "allow-live", a.envBool(EnvAllowLive), "Allow state-changing requests in the live environment (env "+EnvAllowLive+")")
-	fs.BoolVar(&g.readOnly, "read-only", a.envBool(EnvReadOnly), "Refuse every state-changing request (env "+EnvReadOnly+")")
+	// The flag can only add protection: OANDA_READ_ONLY=true is enforced in newEnv
+	// and cannot be revoked with --read-only=false.
+	fs.BoolVar(&g.readOnly, "read-only", false, "Refuse every state-changing request (env "+EnvReadOnly+"=true always applies)")
 	fs.BoolVar(&g.verbose, "verbose", false, "Log requests to stderr (tokens are never logged)")
 }
 
@@ -272,8 +274,10 @@ func (a *App) readBodyFile(path string) ([]byte, error) {
 // newEnv builds the API client and applies the safety policy for cmd.
 func (a *App) newEnv(cmd *Command, cfg globals) (*Env, error) {
 	env := &Env{}
-	if v := strings.TrimSpace(a.Getenv(EnvMaxOrderUnits)); v != "" {
-		limit, err := parseUnitLimit(v)
+	// Only an empty or unset variable disables the limit; whitespace-only
+	// values are rejected so that a typo cannot fail open.
+	if raw := a.Getenv(EnvMaxOrderUnits); raw != "" {
+		limit, err := parseUnitLimit(strings.TrimSpace(raw))
 		if err != nil {
 			return nil, err
 		}
@@ -285,7 +289,7 @@ func (a *App) newEnv(cmd *Command, cfg globals) (*Env, error) {
 	}
 	if cmd.Mutating {
 		switch {
-		case cfg.readOnly:
+		case cfg.readOnly || a.envBool(EnvReadOnly):
 			return nil, &PolicyError{Msg: "read-only mode is enabled (--read-only / " + EnvReadOnly + "); state-changing commands are refused"}
 		case oenv == oanda.Live && !cfg.allowLive && !cfg.dryRun:
 			return nil, &PolicyError{Msg: "refusing a state-changing request in the live environment; pass --allow-live or set " + EnvAllowLive + "=true"}
