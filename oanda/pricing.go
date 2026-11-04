@@ -123,3 +123,28 @@ func (c *Client) GetLatestCandles(ctx context.Context, accountID string, params 
 	out := new(LatestCandlesResponse)
 	return out, c.do(ctx, &request{method: http.MethodGet, path: p, query: q}, out)
 }
+
+// GetAccountCandles fetches account-specific candlesticks, optionally using
+// units to calculate volume-weighted bid and ask prices.
+// GET /v3/accounts/{accountID}/instruments/{instrument}/candles
+func (c *Client) GetAccountCandles(ctx context.Context, accountID, instrument string, params CandlesParams, units Decimal) (*CandlesResponse, error) {
+	if err := ValidateInstrument(instrument); err != nil {
+		return nil, err
+	}
+	p, err := accountPath(accountID, "instruments", seg(instrument), "candles")
+	if err != nil {
+		return nil, err
+	}
+	q, err := params.values()
+	if err != nil {
+		return nil, err
+	}
+	if units != "" {
+		if err := ValidateUnits("units", string(units)); err != nil {
+			return nil, err
+		}
+		q.Set("units", string(units))
+	}
+	out := new(CandlesResponse)
+	return out, c.do(ctx, &request{method: http.MethodGet, path: p, query: q}, out)
+}
