@@ -318,6 +318,7 @@ func TestTokenCommand(t *testing.T) {
 		{name: "empty output", script: "true", wantCode: ExitUsage, wantMsg: "empty"},
 		{name: "timeout", script: "exec sleep 5", wantCode: ExitUsage, wantMsg: "timed out"},
 		{name: "unbounded output is cut off", script: "exec yes secret", wantCode: ExitUsage, wantMsg: "exceeds 4096 bytes"},
+		{name: "background child holding stdout", script: "sleep 5 & echo secret-token", wantCode: ExitUsage, wantMsg: "holding its stdout open"},
 	}
 	defer func(d time.Duration) { tokenCommandTimeout = d }(tokenCommandTimeout)
 	tokenCommandTimeout = 500 * time.Millisecond

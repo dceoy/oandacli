@@ -439,38 +439,48 @@ func (a *App) runTokenCommand(command string) (oanda.Token, error) {
 			c.Env = append(c.Env, k+"="+v)
 		}
 	}
+	// Stdout is not an *os.File, so exec copies it in a goroutine that
+	// WaitDelay bounds even if a grandchild keeps the pipe open.
+	out := &limitedBuffer{max: 4096, onOverflow: cancel}
+	c.Stdout = out
 	c.WaitDelay = time.Second
-	stdout, err := c.StdoutPipe()
-	if err == nil {
-		err = c.Start()
-	}
-	if err != nil {
-		return oanda.Token{}, usagef("cannot run %s: %v", EnvTokenCommand, err)
-	}
-	const limit = 4096
-	out, readErr := io.ReadAll(io.LimitReader(stdout, limit+1))
-	if len(out) > limit {
-		cancel()
-	}
-	err = c.Wait()
+	err := c.Run()
 	var exitErr *exec.ExitError
 	switch {
-	case len(out) > limit:
-		return oanda.Token{}, usagef("%s output exceeds %d bytes", EnvTokenCommand, limit)
+	case out.overflow:
+		return oanda.Token{}, usagef("%s output exceeds %d bytes", EnvTokenCommand, out.max)
+	case errors.Is(err, exec.ErrWaitDelay):
+		return oanda.Token{}, usagef("%s exited but left a process holding its stdout open", EnvTokenCommand)
 	case ctx.Err() != nil:
 		return oanda.Token{}, usagef("%s timed out after %s", EnvTokenCommand, tokenCommandTimeout)
 	case errors.As(err, &exitErr):
 		return oanda.Token{}, usagef("%s failed: %s", EnvTokenCommand, exitErr.ProcessState)
 	case err != nil:
 		return oanda.Token{}, usagef("cannot run %s: %v", EnvTokenCommand, err)
-	case readErr != nil:
-		return oanda.Token{}, usagef("cannot read %s output: %v", EnvTokenCommand, readErr)
 	}
-	t, err := oanda.NewToken(string(out))
+	t, err := oanda.NewToken(out.buf.String())
 	if err != nil {
 		return oanda.Token{}, usagef("%s: %v", EnvTokenCommand, err)
 	}
 	return t, nil
+}
+
+// limitedBuffer collects up to max bytes and calls onOverflow once more is
+// written. It must not expose ReadFrom, so that io.Copy goes through Write.
+type limitedBuffer struct {
+	buf        bytes.Buffer
+	max        int
+	overflow   bool
+	onOverflow func()
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if b.overflow || b.buf.Len()+len(p) > b.max {
+		b.overflow = true
+		b.onOverflow()
+		return 0, io.ErrShortWrite
+	}
+	return b.buf.Write(p)
 }
 
 func find(cmds []*Command, path []string) *Command {
