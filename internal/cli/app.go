@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -37,16 +38,21 @@ const (
 
 // Environment variables.
 const (
-	EnvToken         = "OANDA_API_TOKEN"      // #nosec G101 -- variable name, not a credential
-	EnvTokenFile     = "OANDA_API_TOKEN_FILE" // #nosec G101 -- variable name, not a credential
+	EnvToken         = "OANDA_API_TOKEN"         // #nosec G101 -- variable name, not a credential
+	EnvTokenFile     = "OANDA_API_TOKEN_FILE"    // #nosec G101 -- variable name, not a credential
+	EnvTokenCommand  = "OANDA_API_TOKEN_COMMAND" // #nosec G101 -- variable name, not a credential
 	EnvAccount       = "OANDA_ACCOUNT_ID"
 	EnvEnvironment   = "OANDA_ENVIRONMENT"
 	EnvAllowLive     = "OANDA_ALLOW_LIVE"
 	EnvReadOnly      = "OANDA_READ_ONLY"
+	EnvRequirePlan   = "OANDA_REQUIRE_CONFIRM_PLAN"
 	EnvMaxOrderUnits = "OANDA_MAX_ORDER_UNITS"
 	EnvAPIURL        = "OANDA_API_URL"
 	EnvStreamURL     = "OANDA_STREAM_URL"
 )
+
+// tokenCommandTimeout bounds how long OANDA_API_TOKEN_COMMAND may run.
+var tokenCommandTimeout = 10 * time.Second
 
 // App is the CLI application. Fields are injectable for tests.
 type App struct {
@@ -68,6 +74,7 @@ type globals struct {
 	account   string
 	env       string
 	tokenFile string
+	confirm   string
 	timeout   time.Duration
 	pretty    bool
 	compact   bool
@@ -94,6 +101,7 @@ func (a *App) registerGlobals(fs *flag.FlagSet, g *globals) {
 	// The flag can only add protection: OANDA_READ_ONLY=true is enforced in newEnv
 	// and cannot be revoked with --read-only=false.
 	fs.BoolVar(&g.readOnly, "read-only", false, "Refuse every state-changing request (env "+EnvReadOnly+"=true always applies)")
+	fs.StringVar(&g.confirm, "confirm-plan", "", "Send the state-changing request only if it matches this planHash from --dry-run (env "+EnvRequirePlan+"=true makes it mandatory)")
 	fs.BoolVar(&g.verbose, "verbose", false, "Log requests to stderr (tokens are never logged)")
 }
 
@@ -238,6 +246,16 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		}
 	}
 	res, err := cmd.Run(ctx, env, args2)
+	var dry *oanda.DryRunError
+	if cmd.Mutating && errors.As(err, &dry) {
+		exp := time.Now().Add(planTTL).Unix()
+		return a.writeJSON(map[string]any{
+			"dryRun":        true,
+			"request":       dry,
+			"planHash":      planHash(env.Client.Environment(), env.AccountID, dry.Method, dry.URL, dry.Body, exp),
+			"planExpiresAt": time.Unix(exp, 0).UTC().Format(time.RFC3339),
+		})
+	}
 	if err != nil {
 		return a.fail(err)
 	}
@@ -293,7 +311,11 @@ func (a *App) newEnv(cmd *Command, cfg globals) (*Env, error) {
 			return nil, &PolicyError{Msg: "read-only mode is enabled (--read-only / " + EnvReadOnly + "); state-changing commands are refused"}
 		case oenv == oanda.Live && !cfg.allowLive && !cfg.dryRun:
 			return nil, &PolicyError{Msg: "refusing a state-changing request in the live environment; pass --allow-live or set " + EnvAllowLive + "=true"}
+		case cfg.confirm == "" && !cfg.dryRun && a.envBool(EnvRequirePlan):
+			return nil, &PolicyError{Msg: EnvRequirePlan + " is set; preview with --dry-run and pass its planHash with --confirm-plan"}
 		}
+	} else if cfg.confirm != "" {
+		return nil, usagef("--confirm-plan only applies to state-changing commands")
 	}
 	if cmd.Account {
 		env.AccountID = strings.TrimSpace(cfg.account)
@@ -304,7 +326,11 @@ func (a *App) newEnv(cmd *Command, cfg globals) (*Env, error) {
 			return nil, usagef("%v", err)
 		}
 	}
-	c, err := a.newClient(cfg, oenv, !cmd.Mutating)
+	var extra []oanda.Option
+	if cfg.confirm != "" && !cfg.dryRun {
+		extra = append(extra, oanda.WithMutationCheck(planCheck(cfg.confirm, oenv, env.AccountID, time.Now)))
+	}
+	c, err := a.newClient(cfg, oenv, !cmd.Mutating, extra...)
 	if err != nil {
 		return nil, err
 	}
@@ -313,7 +339,7 @@ func (a *App) newEnv(cmd *Command, cfg globals) (*Env, error) {
 }
 
 // newClient builds an API client from the global configuration.
-func (a *App) newClient(cfg globals, oenv oanda.Environment, readOnly bool) (*oanda.Client, error) {
+func (a *App) newClient(cfg globals, oenv oanda.Environment, readOnly bool, extra ...oanda.Option) (*oanda.Client, error) {
 	token, err := a.loadToken(cfg.tokenFile)
 	if err != nil {
 		if !cfg.dryRun {
@@ -330,6 +356,7 @@ func (a *App) newClient(cfg globals, oenv oanda.Environment, readOnly bool) (*oa
 		oanda.WithReadOnly(readOnly),
 		oanda.WithDryRun(cfg.dryRun),
 	}
+	opts = append(opts, extra...)
 	if cfg.timeout <= 0 {
 		return nil, usagef("--timeout must be positive")
 	}
@@ -343,7 +370,8 @@ func (a *App) newClient(cfg globals, oenv oanda.Environment, readOnly bool) (*oa
 	return c, nil
 }
 
-// loadToken reads the token from a file (preferred) or the environment.
+// loadToken reads the token from a file (preferred), a credential helper
+// command or the environment.
 // Tokens are never accepted as command-line arguments because those are
 // visible to other users via the process list.
 func (a *App) loadToken(file string) (oanda.Token, error) {
@@ -373,13 +401,54 @@ func (a *App) loadToken(file string) (oanda.Token, error) {
 		}
 		return t, nil
 	}
+	if command := a.Getenv(EnvTokenCommand); command != "" {
+		return a.runTokenCommand(command)
+	}
 	v := a.Getenv(EnvToken)
 	if v == "" {
-		return oanda.Token{}, usagef("no API token: set %s or %s (or pass --token-file)", EnvToken, EnvTokenFile)
+		return oanda.Token{}, usagef("no API token: set %s, %s or %s (or pass --token-file)", EnvToken, EnvTokenFile, EnvTokenCommand)
 	}
 	t, err := oanda.NewToken(v)
 	if err != nil {
 		return oanda.Token{}, usagef("%s: %v", EnvToken, err)
+	}
+	return t, nil
+}
+
+// runTokenCommand runs a credential helper without a shell, with a minimal
+// environment and a timeout, and uses its stdout as the token. Its output is
+// never echoed: failures report only the exit status.
+func (a *App) runTokenCommand(command string) (oanda.Token, error) {
+	args := strings.Fields(command)
+	if len(args) == 0 {
+		return oanda.Token{}, usagef("%s is blank", EnvTokenCommand)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), tokenCommandTimeout)
+	defer cancel()
+	c := exec.CommandContext(ctx, args[0], args[1:]...) // #nosec G204 -- user-configured credential helper, run without a shell
+	c.Env = []string{}
+	for _, k := range []string{"PATH", "HOME", "TMPDIR", "SYSTEMROOT"} {
+		if v := a.Getenv(k); v != "" {
+			c.Env = append(c.Env, k+"="+v)
+		}
+	}
+	c.Stderr = io.Discard
+	c.WaitDelay = time.Second
+	out, err := c.Output()
+	var exitErr *exec.ExitError
+	switch {
+	case ctx.Err() != nil:
+		return oanda.Token{}, usagef("%s timed out after %s", EnvTokenCommand, tokenCommandTimeout)
+	case errors.As(err, &exitErr):
+		return oanda.Token{}, usagef("%s failed: %s", EnvTokenCommand, exitErr.ProcessState)
+	case err != nil:
+		return oanda.Token{}, usagef("cannot run %s: %v", EnvTokenCommand, err)
+	case len(out) > 4096:
+		return oanda.Token{}, usagef("%s output exceeds 4096 bytes", EnvTokenCommand)
+	}
+	t, err := oanda.NewToken(string(out))
+	if err != nil {
+		return oanda.Token{}, usagef("%s: %v", EnvTokenCommand, err)
 	}
 	return t, nil
 }
@@ -522,11 +591,13 @@ func (a *App) printUsage(w io.Writer, cmds []*Command, prefix []string) {
 
 Configuration (environment):
   OANDA_API_TOKEN / OANDA_API_TOKEN_FILE   API token (never passed as a flag)
+  OANDA_API_TOKEN_COMMAND                  Credential helper that prints the token
   OANDA_ACCOUNT_ID                         Default account ID
   OANDA_ENVIRONMENT                        practice (default) or live
   OANDA_ALLOW_LIVE=true                    Allow trading in the live environment
   OANDA_READ_ONLY=true                     Refuse all state-changing commands
   OANDA_MAX_ORDER_UNITS                    Reject orders larger than this
+  OANDA_REQUIRE_CONFIRM_PLAN=true          Require --confirm-plan for trading
 
 Output is JSON on stdout; errors are JSON on stderr.
 Exit codes: 0 ok, 1 error, 2 usage, 3 API 4xx, 4 API 5xx, 5 refused by policy.
