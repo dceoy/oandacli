@@ -362,3 +362,39 @@ func TestParseEnvironment(t *testing.T) {
 		t.Error("expected error for unknown environment")
 	}
 }
+
+func TestGetAccountCandles(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v3/accounts/"+testAccount+"/instruments/EUR_USD/candles" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if r.URL.Query().Get("units") != "100" || r.URL.Query().Get("granularity") != "M1" {
+			t.Errorf("unexpected query: %s", r.URL.RawQuery)
+		}
+		_, _ = io.WriteString(w, `{"instrument":"EUR_USD","granularity":"M1","candles":[]}`)
+	})
+	res, err := c.GetAccountCandles(context.Background(), testAccount, "EUR_USD", CandlesParams{Granularity: M1}, "100")
+	if err != nil || res == nil || res.Instrument != "EUR_USD" {
+		t.Fatalf("response = %+v, err = %v", res, err)
+	}
+}
+
+func TestGetAccountCandlesRejectsInvalidArguments(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("invalid request reached server")
+	})
+	for _, tt := range []struct {
+		account, instrument string
+		params CandlesParams
+		units Decimal
+	}{
+		{testAccount, "EUR/USD", CandlesParams{}, ""},
+		{"../bad", "EUR_USD", CandlesParams{}, ""},
+		{testAccount, "EUR_USD", CandlesParams{Count: 5001}, ""},
+		{testAccount, "EUR_USD", CandlesParams{}, "invalid"},
+	} {
+		if _, err := c.GetAccountCandles(context.Background(), tt.account, tt.instrument, tt.params, tt.units); !errors.Is(err, ErrInvalidArgument) {
+			t.Errorf("input %+v: err = %v", tt, err)
+		}
+	}
+}
