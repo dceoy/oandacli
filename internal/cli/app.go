@@ -328,7 +328,11 @@ func (a *App) newEnv(cmd *Command, cfg globals) (*Env, error) {
 	}
 	var extra []oanda.Option
 	if cfg.confirm != "" && !cfg.dryRun {
-		extra = append(extra, oanda.WithMutationCheck(planCheck(cfg.confirm, oenv, env.AccountID, time.Now)))
+		dir, err := os.UserCacheDir()
+		if err != nil {
+			return nil, &PolicyError{Msg: "--confirm-plan needs a cache directory to record used plans: " + err.Error()}
+		}
+		extra = append(extra, oanda.WithMutationCheck(planCheck(cfg.confirm, oenv, env.AccountID, filepath.Join(dir, "oandactl", "plans"), time.Now)))
 	}
 	c, err := a.newClient(cfg, oenv, !cmd.Mutating, extra...)
 	if err != nil {
@@ -425,26 +429,42 @@ func (a *App) runTokenCommand(command string) (oanda.Token, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), tokenCommandTimeout)
 	defer cancel()
-	c := exec.CommandContext(ctx, args[0], args[1:]...) // #nosec G204 -- user-configured credential helper, run without a shell
+	// Trusted by design: the command comes only from the invoking user's or
+	// runtime's environment, never from repository content, and runs without a shell.
+	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
+	c := exec.CommandContext(ctx, args[0], args[1:]...) // #nosec G204 -- trusted credential helper
 	c.Env = []string{}
 	for _, k := range []string{"PATH", "HOME", "TMPDIR", "SYSTEMROOT"} {
 		if v := a.Getenv(k); v != "" {
 			c.Env = append(c.Env, k+"="+v)
 		}
 	}
-	c.Stderr = io.Discard
 	c.WaitDelay = time.Second
-	out, err := c.Output()
+	stdout, err := c.StdoutPipe()
+	if err == nil {
+		err = c.Start()
+	}
+	if err != nil {
+		return oanda.Token{}, usagef("cannot run %s: %v", EnvTokenCommand, err)
+	}
+	const limit = 4096
+	out, readErr := io.ReadAll(io.LimitReader(stdout, limit+1))
+	if len(out) > limit {
+		cancel()
+	}
+	err = c.Wait()
 	var exitErr *exec.ExitError
 	switch {
+	case len(out) > limit:
+		return oanda.Token{}, usagef("%s output exceeds %d bytes", EnvTokenCommand, limit)
 	case ctx.Err() != nil:
 		return oanda.Token{}, usagef("%s timed out after %s", EnvTokenCommand, tokenCommandTimeout)
 	case errors.As(err, &exitErr):
 		return oanda.Token{}, usagef("%s failed: %s", EnvTokenCommand, exitErr.ProcessState)
 	case err != nil:
 		return oanda.Token{}, usagef("cannot run %s: %v", EnvTokenCommand, err)
-	case len(out) > 4096:
-		return oanda.Token{}, usagef("%s output exceeds 4096 bytes", EnvTokenCommand)
+	case readErr != nil:
+		return oanda.Token{}, usagef("cannot read %s output: %v", EnvTokenCommand, readErr)
 	}
 	t, err := oanda.NewToken(string(out))
 	if err != nil {

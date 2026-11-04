@@ -4,6 +4,10 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -27,17 +31,16 @@ func planHash(env oanda.Environment, account, method, url string, body []byte, e
 	return exp + "." + hex.EncodeToString(h.Sum(nil))
 }
 
-// planCheck returns an oanda.WithMutationCheck callback that allows exactly
-// one request, and only if it hashes to plan.
-func planCheck(plan string, env oanda.Environment, account string, now func() time.Time) func(string, string, []byte) error {
-	used := false
+// planCheck returns an oanda.WithMutationCheck callback that allows a request
+// only if it hashes to plan, and consumes the plan by atomically creating a
+// marker file in dir so that it authorizes a single request across
+// invocations. A consumed plan stays used even if sending then fails.
+func planCheck(plan string, env oanda.Environment, account, dir string, now func() time.Time) func(string, string, []byte) error {
 	return func(method, url string, body []byte) error {
 		exp, _, _ := strings.Cut(plan, ".")
 		expires, err := strconv.ParseInt(exp, 10, 64)
 		t := now().Unix()
 		switch {
-		case used:
-			return &PolicyError{Msg: "--confirm-plan authorizes a single request"}
 		case err != nil:
 			return &PolicyError{Msg: "--confirm-plan is malformed; copy planHash from the --dry-run output"}
 		case t > expires:
@@ -47,7 +50,30 @@ func planCheck(plan string, env oanda.Environment, account string, now func() ti
 		case subtle.ConstantTimeCompare([]byte(planHash(env, account, method, url, body, expires)), []byte(plan)) != 1:
 			return &PolicyError{Msg: "--confirm-plan does not match this request; nothing was sent"}
 		}
-		used = true
-		return nil
+		return consumePlan(dir, plan, t)
 	}
+}
+
+// consumePlan records plan (already verified, so safe as a file name) as used
+// and prunes markers of expired plans.
+func consumePlan(dir, plan string, now int64) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return &PolicyError{Msg: "cannot record --confirm-plan use: " + err.Error()}
+	}
+	f, err := os.OpenFile(filepath.Join(dir, plan), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G304 -- name is a verified plan hash
+	if errors.Is(err, fs.ErrExist) {
+		return &PolicyError{Msg: "--confirm-plan was already used; run --dry-run again"}
+	}
+	if err != nil {
+		return &PolicyError{Msg: "cannot record --confirm-plan use: " + err.Error()}
+	}
+	_ = f.Close()
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		exp, _, _ := strings.Cut(e.Name(), ".")
+		if n, err := strconv.ParseInt(exp, 10, 64); err == nil && n < now {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
+	return nil
 }

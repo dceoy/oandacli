@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -316,6 +317,7 @@ func TestTokenCommand(t *testing.T) {
 		{name: "invalid token hides output", script: "echo 'bad secret value'", wantCode: ExitUsage, wantMsg: "whitespace"},
 		{name: "empty output", script: "true", wantCode: ExitUsage, wantMsg: "empty"},
 		{name: "timeout", script: "exec sleep 5", wantCode: ExitUsage, wantMsg: "timed out"},
+		{name: "unbounded output is cut off", script: "exec yes secret", wantCode: ExitUsage, wantMsg: "exceeds 4096 bytes"},
 	}
 	defer func(d time.Duration) { tokenCommandTimeout = d }(tokenCommandTimeout)
 	tokenCommandTimeout = 500 * time.Millisecond
@@ -365,6 +367,9 @@ func TestTokenFileWinsOverCommand(t *testing.T) {
 }
 
 func TestConfirmPlan(t *testing.T) {
+	cache := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cache)
+	t.Setenv("HOME", cache)
 	order := []string{"order", "market", "--instrument", "EUR_USD", "--units", "100"}
 	h := newHarness(t, okJSON(`{}`))
 	if code := h.run(append(order, "--dry-run")...); code != ExitOK {
@@ -381,6 +386,8 @@ func TestConfirmPlan(t *testing.T) {
 	plan := dry.PlanHash
 	expired := planHash(oanda.Practice, testAccount, dry.Request.Method, dry.Request.URL, dry.Request.Body, time.Now().Add(-time.Second).Unix())
 	farFuture := planHash(oanda.Practice, testAccount, dry.Request.Method, dry.Request.URL, dry.Request.Body, time.Now().Add(24*time.Hour).Unix())
+	// Distinct expiries give distinct, still valid plans for cases that consume one.
+	fresh := planHash(oanda.Practice, testAccount, dry.Request.Method, dry.Request.URL, dry.Request.Body, time.Now().Add(planTTL-time.Minute).Unix())
 	tampered := plan[:len(plan)-1] + map[bool]string{true: "0", false: "1"}[plan[len(plan)-1] != '0']
 
 	tests := []struct {
@@ -391,6 +398,7 @@ func TestConfirmPlan(t *testing.T) {
 		wantCall bool
 	}{
 		{name: "matching plan", args: append(order, "--confirm-plan", plan), wantCode: ExitOK, wantCall: true},
+		{name: "replayed plan in a new invocation", args: append(order, "--confirm-plan", plan), wantCode: ExitPolicy},
 		{name: "changed units", args: []string{"order", "market", "--instrument", "EUR_USD", "--units", "1000", "--confirm-plan", plan}, wantCode: ExitPolicy},
 		{name: "other account", args: append(order, "--confirm-plan", plan, "--account", "101-004-1234567-002"), wantCode: ExitPolicy},
 		{name: "other environment", env: map[string]string{EnvEnvironment: "live", EnvAllowLive: "true"}, args: append(order, "--confirm-plan", plan), wantCode: ExitPolicy},
@@ -401,7 +409,7 @@ func TestConfirmPlan(t *testing.T) {
 		{name: "plan does not bypass live guard", env: map[string]string{EnvEnvironment: "live"}, args: append(order, "--confirm-plan", plan), wantCode: ExitPolicy},
 		{name: "plan does not bypass read-only", env: map[string]string{EnvReadOnly: "true"}, args: append(order, "--confirm-plan", plan), wantCode: ExitPolicy},
 		{name: "required but missing", env: map[string]string{EnvRequirePlan: "true"}, args: order, wantCode: ExitPolicy},
-		{name: "required and matching", env: map[string]string{EnvRequirePlan: "true"}, args: append(order, "--confirm-plan", plan), wantCode: ExitOK, wantCall: true},
+		{name: "required and matching", env: map[string]string{EnvRequirePlan: "true"}, args: append(order, "--confirm-plan", fresh), wantCode: ExitOK, wantCall: true},
 		{name: "required allows dry run", env: map[string]string{EnvRequirePlan: "true"}, args: append(order, "--dry-run"), wantCode: ExitOK},
 		{name: "read command rejects plan", args: []string{"account", "summary", "--confirm-plan", plan}, wantCode: ExitUsage},
 	}
@@ -424,13 +432,24 @@ func TestConfirmPlan(t *testing.T) {
 
 func TestPlanCheckAllowsOneRequest(t *testing.T) {
 	now := time.Now()
-	plan := planHash(oanda.Practice, testAccount, "PUT", "https://x/v3", []byte(`{}`), now.Add(time.Minute).Unix())
-	check := planCheck(plan, oanda.Practice, testAccount, func() time.Time { return now })
-	if err := check("PUT", "https://x/v3", []byte(`{}`)); err != nil {
-		t.Fatalf("first request: %v", err)
+	dir := filepath.Join(t.TempDir(), "plans")
+	stale := filepath.Join(dir, strconv.FormatInt(now.Add(-time.Minute).Unix(), 10)+".old")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	var policy *PolicyError
-	if err := check("PUT", "https://x/v3", []byte(`{}`)); !errors.As(err, &policy) {
-		t.Errorf("second request: %v, want PolicyError", err)
+	if err := os.WriteFile(stale, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := planHash(oanda.Practice, testAccount, "PUT", "https://x/v3", []byte(`{}`), now.Add(time.Minute).Unix())
+	// Separate callbacks model separate CLI invocations.
+	for i, wantErr := range []bool{false, true} {
+		err := planCheck(plan, oanda.Practice, testAccount, dir, func() time.Time { return now })("PUT", "https://x/v3", []byte(`{}`))
+		var policy *PolicyError
+		if wantErr != errors.As(err, &policy) {
+			t.Errorf("request %d: err = %v, want error %v", i+1, err, wantErr)
+		}
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expired marker was not pruned: %v", err)
 	}
 }
