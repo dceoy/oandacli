@@ -363,6 +363,7 @@ func (a *App) newClient(cfg globals, oenv oanda.Environment, readOnly bool, extr
 		oanda.WithBaseURLs(a.Getenv(EnvAPIURL), a.Getenv(EnvStreamURL)),
 		oanda.WithTimeout(cfg.timeout),
 		oanda.WithUserAgent("oandactl/" + Version),
+		oanda.WithConnectionWait(waitForConnection),
 		// Defense in depth: the client itself refuses writes for read-only commands.
 		oanda.WithReadOnly(readOnly),
 		oanda.WithDryRun(cfg.dryRun),

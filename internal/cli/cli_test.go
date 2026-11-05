@@ -35,6 +35,9 @@ type harness struct {
 
 func newHarness(t *testing.T, respond func(w http.ResponseWriter, r *http.Request)) *harness {
 	t.Helper()
+	cache := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cache)
+	t.Setenv("HOME", cache)
 	h := &harness{}
 	h.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.calls.Add(1)

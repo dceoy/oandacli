@@ -104,6 +104,12 @@ oandactl transaction since --id 6410 --type ORDER_FILL
 
 Global flags work on every command: `--account`, `--env`, `--token-file`, `--timeout`, `--pretty`, `--compact`, `--dry-run`, `--confirm-plan`, `--plan-ttl`, `--allow-live`, `--read-only` and `--verbose`. Output is pretty-printed when stdout is a terminal and compact otherwise.
 
+### Connection pacing
+
+On Linux and macOS, the CLI automatically spaces new TCP connection attempts at least 500 ms apart across invocations sharing the same persistent user cache. REST, streaming, practice and live calls share `oandactl/connections` under the user cache directory. An OS lock serializes concurrent processes and is released on process exit; the file contains only a timestamp, never credentials or account data. The first connection after an idle interval is immediate; reused connections, help, policy refusals and dry runs do not wait or reserve a slot. GET reconnects also use this gate; writes are still never retried.
+
+Use a writable local cache with working file locks. Missing/unwritable cache configuration, invalid timestamps or clock rollback fail closed instead of silently disabling pacing. Waits respect dial cancellation and are bounded to 30 seconds. Separate cache namespaces, users, hosts or other API clients are not coordinated; those callers still need external pacing. CLI connection pacing currently supports Linux/macOS; other platforms return an error before dialing. SDK clients do not use a shared cache unless explicitly configured.
+
 ### Commands
 
 | Group         | Commands                                                                                                                                     |
@@ -195,6 +201,7 @@ Options:
 | `WithEnvironment`        | Practice             |
 | `WithBaseURLs`           |                      |
 | `WithHTTPClient`         |                      |
+| `WithConnectionWait`     | None                 |
 | `WithTimeout`            | 30s                  |
 | `WithRateLimit`          | 100 rps, burst 20    |
 | `WithMaxRetries`         | 3, GET requests only |
@@ -205,6 +212,8 @@ Options:
 | `WithMutationCheck`      |                      |
 | `WithLogger`             |                      |
 | `WithUserAgent`          |                      |
+
+`WithConnectionWait` installs a callback before each new dial on the default transport; it cannot be combined with `WithHTTPClient`. SDK clients have no shared-cache pacing by default.
 
 ## Security model
 

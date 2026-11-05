@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode"
 )
@@ -121,6 +122,7 @@ type options struct {
 	rps              float64
 	burst            int
 	logger           *slog.Logger
+	connectionWait   func(context.Context) error
 }
 
 // Option configures a Client.
@@ -157,6 +159,14 @@ func WithHTTPClient(c *http.Client) Option {
 		o.httpClient = c
 		return nil
 	}
+}
+
+// WithConnectionWait calls wait immediately before each new TCP connection on
+// the default transport, including stream connections and GET retry reconnects.
+// Reused connections and dry runs do not call it. It cannot be combined with
+// WithHTTPClient, whose transport and connection lifecycle belong to the caller.
+func WithConnectionWait(wait func(context.Context) error) Option {
+	return func(o *options) error { o.connectionWait = wait; return nil }
 }
 
 // WithTimeout sets the per-request timeout for non-streaming requests
@@ -297,9 +307,16 @@ func NewClient(token Token, opts ...Option) (*Client, error) {
 
 	var base http.Client
 	if o.httpClient != nil {
+		if o.connectionWait != nil {
+			return nil, invalid("connection wait", "cannot be combined with a custom HTTP client")
+		}
 		base = *o.httpClient
 	} else {
-		base = http.Client{Transport: newTransport()}
+		t := newTransport()
+		if o.connectionWait != nil {
+			t.DialContext = newConnectionDialer(o.connectionWait).DialContext
+		}
+		base = http.Client{Transport: t}
 	}
 	base.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	hc := base
@@ -338,6 +355,18 @@ func (c *Client) Environment() Environment { return c.env }
 
 // ReadOnly reports whether the client refuses state-changing requests.
 func (c *Client) ReadOnly() bool { return c.readOnly }
+
+// newConnectionDialer preserves the default transport's dial timeouts. ControlContext
+// runs after DNS resolution for every address attempt, including fallback attempts.
+func newConnectionDialer(wait func(context.Context) error) *net.Dialer {
+	return &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+		ControlContext: func(ctx context.Context, _, _ string, _ syscall.RawConn) error {
+			return wait(ctx)
+		},
+	}
+}
 
 func newTransport() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
