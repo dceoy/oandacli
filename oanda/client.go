@@ -121,6 +121,7 @@ type options struct {
 	rps              float64
 	burst            int
 	logger           *slog.Logger
+	connectionWait   func(context.Context) error
 }
 
 // Option configures a Client.
@@ -157,6 +158,14 @@ func WithHTTPClient(c *http.Client) Option {
 		o.httpClient = c
 		return nil
 	}
+}
+
+// WithConnectionWait calls wait immediately before each new TCP connection on
+// the default transport, including stream connections and GET retry reconnects.
+// Reused connections and dry runs do not call it. It cannot be combined with
+// WithHTTPClient, whose transport and connection lifecycle belong to the caller.
+func WithConnectionWait(wait func(context.Context) error) Option {
+	return func(o *options) error { o.connectionWait = wait; return nil }
 }
 
 // WithTimeout sets the per-request timeout for non-streaming requests
@@ -297,9 +306,22 @@ func NewClient(token Token, opts ...Option) (*Client, error) {
 
 	var base http.Client
 	if o.httpClient != nil {
+		if o.connectionWait != nil {
+			return nil, invalid("connection wait", "cannot be combined with a custom HTTP client")
+		}
 		base = *o.httpClient
 	} else {
-		base = http.Client{Transport: newTransport()}
+		t := newTransport()
+		if o.connectionWait != nil {
+			dial := t.DialContext
+			t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+				if err := o.connectionWait(ctx); err != nil {
+					return nil, err
+				}
+				return dial(ctx, network, addr)
+			}
+		}
+		base = http.Client{Transport: t}
 	}
 	base.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	hc := base

@@ -71,9 +71,9 @@ For historical candles, use `instrument candles` when no account ID is available
 
 ### Pacing
 
-OANDA allows at most 2 new connections per second per client, separate from its 120 requests/s limit. Every `oandactl` invocation opens its own connection and exits, so the CLI's in-process rate limiter cannot pace separate invocations.
+OANDA allows at most 2 new connections per second per client, separate from its 120 requests/s limit. On Linux/macOS, the CLI automatically spaces new TCP connection attempts by at least 500 ms across sequential or concurrent invocations sharing the persistent user cache (`oandactl/connections`). The first call after an idle interval is immediate; dry runs and reused connections do not wait. No manual sleep is needed within that shared namespace. Use a writable local cache with working OS file locks; cache failures or invalid/future timestamps refuse connections rather than disable pacing. Locks release on process exit, and waits are cancellable and bounded to 30 seconds. Other CLI platforms fail before dialing.
 
-- Run `oandactl` commands one after another, never in parallel, and leave at least 1 second between invocations (for example `sleep 1`). Prefer one command that fetches several items (`--instruments EUR_USD,USD_JPY`, `pricing latest-candles --specs ...`) over many separate calls.
+- Prefer sequential commands and one command that fetches several items (`--instruments EUR_USD,USD_JPY`, `pricing latest-candles --specs ...`) over many separate calls. Separate cache namespaces, users, hosts and other API clients are not coordinated: retain external pacing (for example `sleep 1`) between those callers. Do not clear or move the cache to bypass a pacing error; report it to the operator.
 - Never retry a state-changing command automatically. If a write fails or times out, check the account state first (`oandactl order pending`, `oandactl trade open`, `oandactl transaction since --id <ID>`) and ask the user before repeating it.
 - For continuous data, use a bounded stream (`--max-messages` / `--duration`) instead of polling in a loop.
 
