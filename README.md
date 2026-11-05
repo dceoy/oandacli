@@ -19,11 +19,12 @@ version=v0.1.0  # example: choose a published release
 platform=linux_amd64
 asset="oandactl_${version}_${platform}"
 url="https://github.com/dceoy/oandactl/releases/download/${version}"
-curl -fLO "${url}/${asset}"
-curl -fLO "${url}/SHA256SUMS"
-grep "  ${asset}$" SHA256SUMS > selected.sha256
-sha256sum -c selected.sha256   # macOS: shasum -a 256 -c selected.sha256
-install -m 755 "$asset" "$HOME/.local/bin/oandactl"
+# macOS: replace sha256sum -c with shasum -a 256 -c below
+curl -fLO "${url}/${asset}" &&
+curl -fLO "${url}/SHA256SUMS" &&
+grep "  ${asset}$" SHA256SUMS > selected.sha256 &&
+sha256sum -c selected.sha256 &&
+install -m 755 "$asset" "$HOME/.local/bin/oandactl" &&
 oandactl version              # prints the release tag, e.g. v0.1.0
 ```
 
