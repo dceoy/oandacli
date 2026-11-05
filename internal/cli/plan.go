@@ -33,8 +33,10 @@ func planHash(env oanda.Environment, account, method, url string, body []byte, e
 
 // planCheck returns an oanda.WithMutationCheck callback that allows a request
 // only if it hashes to plan, and consumes the plan by atomically creating a
-// marker file in dir so that it authorizes a single request across
-// invocations. A consumed plan stays used even if sending then fails.
+// marker file in dir. It authorizes a single request only across invocations
+// sharing the same persistent cache namespace; separate or cleared caches allow
+// replay. This is not broker-side idempotency or cross-worker replay protection.
+// A consumed plan stays used in that namespace even if sending then fails.
 func planCheck(plan string, env oanda.Environment, account, dir string, now func() time.Time) func(string, string, []byte) error {
 	return func(method, url string, body []byte) error {
 		exp, _, _ := strings.Cut(plan, ".")

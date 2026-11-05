@@ -431,6 +431,52 @@ func TestConfirmPlan(t *testing.T) {
 	}
 }
 
+func TestConfirmPlanSeparateCaches(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("this test exercises XDG_CACHE_HOME on Linux")
+	}
+	h := newHarness(t, okJSON(`{}`))
+	h.env[EnvRequirePlan] = "true"
+	order := []string{"order", "market", "--instrument", "EUR_USD", "--units", "100"}
+	if code := h.run(append(order, "--dry-run")...); code != ExitOK {
+		t.Fatalf("dry run exit %d: %s", code, h.stderr.String())
+	}
+	var dry struct {
+		PlanHash string `json:"planHash"`
+	}
+	if err := json.Unmarshal(h.stdout.Bytes(), &dry); err != nil || dry.PlanHash == "" {
+		t.Fatalf("dry run stdout = %s", h.stdout.String())
+	}
+	// The same plan can send once per cache namespace, not once globally.
+	// Returning to either persistent namespace still rejects its replay.
+	a, b := t.TempDir(), t.TempDir()
+	for _, tt := range []struct {
+		name     string
+		cache    string
+		wantCode int
+	}{
+		{"first cache", a, ExitOK},
+		{"separate cache allows the same plan", b, ExitOK},
+		{"first cache still refuses replay", a, ExitPolicy},
+		{"second cache still refuses replay", b, ExitPolicy},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_CACHE_HOME", tt.cache)
+			h.calls.Store(0)
+			if code := h.run(append(order, "--confirm-plan", dry.PlanHash)...); code != tt.wantCode {
+				t.Fatalf("exit = %d, want %d (stderr %s)", code, tt.wantCode, h.stderr.String())
+			}
+			wantCalls := int32(0)
+			if tt.wantCode == ExitOK {
+				wantCalls = 1
+			}
+			if got := h.calls.Load(); got != wantCalls {
+				t.Errorf("server calls = %d, want %d", got, wantCalls)
+			}
+		})
+	}
+}
+
 func TestPlanCheckAllowsOneRequest(t *testing.T) {
 	now := time.Now()
 	dir := filepath.Join(t.TempDir(), "plans")
@@ -454,6 +500,7 @@ func TestPlanCheckAllowsOneRequest(t *testing.T) {
 		t.Errorf("expired marker was not pruned: %v", err)
 	}
 }
+
 func TestPricingAccountCandles(t *testing.T) {
 	h := newHarness(t, okJSON(`{"instrument":"EUR_USD","granularity":"M1","candles":[]}`))
 	if code := h.run("pricing", "candles", "--instrument", "EUR_USD", "--granularity", "M1", "--units", "100"); code != ExitOK {
