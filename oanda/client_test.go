@@ -385,8 +385,8 @@ func TestGetAccountCandlesRejectsInvalidArguments(t *testing.T) {
 	})
 	for _, tt := range []struct {
 		account, instrument string
-		params CandlesParams
-		units Decimal
+		params              CandlesParams
+		units               Decimal
 	}{
 		{testAccount, "EUR/USD", CandlesParams{}, ""},
 		{"../bad", "EUR_USD", CandlesParams{}, ""},
