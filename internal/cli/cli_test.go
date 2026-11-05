@@ -280,3 +280,17 @@ func TestPricingStreamReportsFailureAfterPartialOutput(t *testing.T) {
 		t.Errorf("stderr = %s", h.stderr.String())
 	}
 }
+
+func TestPricingAccountCandles(t *testing.T) {
+	h := newHarness(t, okJSON(`{"instrument":"EUR_USD","granularity":"M1","candles":[]}`))
+	if code := h.run("pricing", "candles", "--instrument", "EUR_USD", "--granularity", "M1", "--units", "100"); code != ExitOK {
+		t.Fatalf("exit %d: %s", code, h.stderr.String())
+	}
+	r := h.last.Load()
+	if r.Method != http.MethodGet || r.URL.Path != "/v3/accounts/"+testAccount+"/instruments/EUR_USD/candles" {
+		t.Errorf("request = %s %s", r.Method, r.URL.Path)
+	}
+	if r.URL.Query().Get("units") != "100" || r.URL.Query().Get("granularity") != "M1" {
+		t.Errorf("query = %s", r.URL.RawQuery)
+	}
+}
