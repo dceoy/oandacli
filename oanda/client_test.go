@@ -67,6 +67,43 @@ func TestNewTokenRejectsBadInput(t *testing.T) {
 	}
 }
 
+// Credential brokers hand out opaque surrogate tokens that do not look like
+// OANDA-issued tokens; NewToken must keep accepting them.
+func TestNewTokenAcceptsOpaqueTokens(t *testing.T) {
+	for _, in := range []string{"hsurr:0123abcd", "surrogate_v1.eyJhIjoxfQ.sig-_+/=", "op://vault/item/field", "x", strings.Repeat("a", 1024)} {
+		tok, err := NewToken(in + "\n")
+		if err != nil {
+			t.Errorf("NewToken(%q) = %v", in, err)
+		} else if tok.authorizationHeader() != "Bearer "+in {
+			t.Errorf("NewToken(%q) header = %q", in, tok.authorizationHeader())
+		}
+	}
+}
+
+func TestMutationCheck(t *testing.T) {
+	var calls atomic.Int32
+	h := func(w http.ResponseWriter, r *http.Request) { calls.Add(1); _, _ = io.WriteString(w, `{}`) }
+	errDeny := errors.New("deny")
+	var seen []string
+	c, _ := newTestClient(t, h, WithMutationCheck(func(method, url string, body []byte) error {
+		seen = append(seen, method+" "+url[strings.Index(url, "/v3"):]+" "+string(body))
+		return errDeny
+	}))
+	if _, err := c.GetAccountSummary(context.Background(), testAccount); err != nil {
+		t.Fatalf("GET err = %v", err)
+	}
+	if _, err := c.CloseTrade(context.Background(), testAccount, "7", ""); !errors.Is(err, errDeny) {
+		t.Fatalf("PUT err = %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Errorf("server calls = %d, want 1 (GET only)", calls.Load())
+	}
+	want := "PUT /v3/accounts/" + testAccount + `/trades/7/close {"units":"ALL"}`
+	if len(seen) != 1 || seen[0] != want {
+		t.Errorf("check saw %q, want [%q]", seen, want)
+	}
+}
+
 func TestBaseURLValidation(t *testing.T) {
 	tests := []struct {
 		url string

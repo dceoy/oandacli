@@ -100,6 +100,7 @@ type Client struct {
 	stallTimeout     time.Duration
 	readOnly         bool
 	dryRun           bool
+	mutationCheck    func(method, url string, body []byte) error
 	limiter          *limiter
 	logger           *slog.Logger
 }
@@ -116,6 +117,7 @@ type options struct {
 	stallTimeout     time.Duration
 	readOnly         bool
 	dryRun           bool
+	mutationCheck    func(method, url string, body []byte) error
 	rps              float64
 	burst            int
 	logger           *slog.Logger
@@ -242,6 +244,13 @@ func WithDryRun(dryRun bool) Option {
 	return func(o *options) error { o.dryRun = dryRun; return nil }
 }
 
+// WithMutationCheck calls check with the exact method, URL and body of every
+// state-changing request before it is sent; a non-nil error aborts the
+// request and is returned unchanged. It is not called in dry-run mode.
+func WithMutationCheck(check func(method, url string, body []byte) error) Option {
+	return func(o *options) error { o.mutationCheck = check; return nil }
+}
+
 // WithLogger enables debug logging of requests (method, path, status,
 // request ID and duration). Tokens and bodies are never logged.
 func WithLogger(l *slog.Logger) Option {
@@ -315,6 +324,7 @@ func NewClient(token Token, opts ...Option) (*Client, error) {
 		stallTimeout:     o.stallTimeout,
 		readOnly:         o.readOnly,
 		dryRun:           o.dryRun,
+		mutationCheck:    o.mutationCheck,
 		logger:           o.logger,
 	}
 	if o.rps > 0 {
@@ -443,6 +453,11 @@ func (c *Client) prepare(r *request, base *url.URL) (string, []byte, error) {
 	u := c.buildURL(base, r)
 	if c.dryRun {
 		return "", nil, &DryRunError{Method: r.method, URL: u, Body: payload}
+	}
+	if c.mutationCheck != nil && r.mutating() {
+		if err := c.mutationCheck(r.method, u, payload); err != nil {
+			return "", nil, err
+		}
 	}
 	return u, payload, nil
 }

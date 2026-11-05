@@ -4,14 +4,21 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/dceoy/oandactl/oanda"
 )
 
 const testAccount = "101-004-1234567-001"
@@ -278,6 +285,219 @@ func TestPricingStreamReportsFailureAfterPartialOutput(t *testing.T) {
 	}
 	if !strings.Contains(h.stderr.String(), "stream closed by server") {
 		t.Errorf("stderr = %s", h.stderr.String())
+	}
+}
+
+func writeScript(t *testing.T, body string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell scripts are not available on Windows")
+	}
+	p := filepath.Join(t.TempDir(), "helper.sh")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil { // #nosec G306 -- executable test helper
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestTokenCommand(t *testing.T) {
+	// The helper must not inherit the parent environment.
+	t.Setenv(EnvToken, "inherited-secret")
+	tests := []struct {
+		name     string
+		script   string
+		env      map[string]string
+		wantCode int
+		wantAuth string
+		wantMsg  string
+	}{
+		{name: "surrogate token", script: `[ -z "$OANDA_API_TOKEN" ] || exit 9; echo hsurr:abc123`, wantAuth: "Bearer hsurr:abc123"},
+		{name: "command wins over env", script: "echo from-command", env: map[string]string{EnvToken: "from-env"}, wantAuth: "Bearer from-command"},
+		{name: "failure hides output", script: "echo stdout-secret; echo stderr-secret >&2; exit 3", wantCode: ExitUsage, wantMsg: "exit status 3"},
+		{name: "invalid token hides output", script: "echo 'bad secret value'", wantCode: ExitUsage, wantMsg: "whitespace"},
+		{name: "empty output", script: "true", wantCode: ExitUsage, wantMsg: "empty"},
+		{name: "timeout", script: "exec sleep 5", wantCode: ExitUsage, wantMsg: "timed out"},
+		{name: "unbounded output is cut off", script: "exec yes secret", wantCode: ExitUsage, wantMsg: "exceeds 4096 bytes"},
+		{name: "background child holding stdout", script: "sleep 5 & echo secret-token", wantCode: ExitUsage, wantMsg: "holding its stdout open"},
+	}
+	defer func(d time.Duration) { tokenCommandTimeout = d }(tokenCommandTimeout)
+	tokenCommandTimeout = 500 * time.Millisecond
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t, okJSON(`{}`))
+			h.env[EnvToken] = ""
+			h.env["PATH"] = os.Getenv("PATH")
+			h.env[EnvTokenCommand] = writeScript(t, tt.script)
+			for k, v := range tt.env {
+				h.env[k] = v
+			}
+			if code := h.run("account", "list"); code != tt.wantCode {
+				t.Fatalf("exit = %d, want %d (stderr %s)", code, tt.wantCode, h.stderr.String())
+			}
+			if tt.wantAuth != "" {
+				if got := h.last.Load().Header.Get("Authorization"); got != tt.wantAuth {
+					t.Errorf("Authorization = %q", got)
+				}
+				return
+			}
+			if h.calls.Load() != 0 {
+				t.Error("request sent without a token")
+			}
+			out := h.stderr.String()
+			if !strings.Contains(out, tt.wantMsg) || strings.Contains(out, "secret") {
+				t.Errorf("stderr = %s", out)
+			}
+		})
+	}
+}
+
+func TestTokenFileWinsOverCommand(t *testing.T) {
+	h := newHarness(t, okJSON(`{}`))
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenPath, []byte("file-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.env[EnvTokenFile] = tokenPath
+	h.env[EnvTokenCommand] = writeScript(t, "exit 1")
+	if code := h.run("account", "list"); code != ExitOK {
+		t.Fatalf("exit %d: %s", code, h.stderr.String())
+	}
+	if got := h.last.Load().Header.Get("Authorization"); got != "Bearer file-token" {
+		t.Errorf("Authorization = %q", got)
+	}
+}
+
+func TestConfirmPlan(t *testing.T) {
+	cache := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cache)
+	t.Setenv("HOME", cache)
+	order := []string{"order", "market", "--instrument", "EUR_USD", "--units", "100"}
+	h := newHarness(t, okJSON(`{}`))
+	if code := h.run(append(order, "--dry-run")...); code != ExitOK {
+		t.Fatalf("dry run exit %d: %s", code, h.stderr.String())
+	}
+	var dry struct {
+		Request       oanda.DryRunError `json:"request"`
+		PlanHash      string            `json:"planHash"`
+		PlanExpiresAt time.Time         `json:"planExpiresAt"`
+	}
+	if err := json.Unmarshal(h.stdout.Bytes(), &dry); err != nil || dry.PlanHash == "" || time.Until(dry.PlanExpiresAt) <= 0 {
+		t.Fatalf("dry run stdout = %s", h.stdout.String())
+	}
+	plan := dry.PlanHash
+	expired := planHash(oanda.Practice, testAccount, dry.Request.Method, dry.Request.URL, dry.Request.Body, time.Now().Add(-time.Second).Unix())
+	farFuture := planHash(oanda.Practice, testAccount, dry.Request.Method, dry.Request.URL, dry.Request.Body, time.Now().Add(24*time.Hour).Unix())
+	// Distinct expiries give distinct, still valid plans for cases that consume one.
+	fresh := planHash(oanda.Practice, testAccount, dry.Request.Method, dry.Request.URL, dry.Request.Body, time.Now().Add(planTTL-time.Minute).Unix())
+	tampered := plan[:len(plan)-1] + map[bool]string{true: "0", false: "1"}[plan[len(plan)-1] != '0']
+
+	tests := []struct {
+		name     string
+		env      map[string]string
+		args     []string
+		wantCode int
+		wantCall bool
+	}{
+		{name: "matching plan", args: append(order, "--confirm-plan", plan), wantCode: ExitOK, wantCall: true},
+		{name: "replayed plan in a new invocation", args: append(order, "--confirm-plan", plan), wantCode: ExitPolicy},
+		{name: "changed units", args: []string{"order", "market", "--instrument", "EUR_USD", "--units", "1000", "--confirm-plan", plan}, wantCode: ExitPolicy},
+		{name: "other account", args: append(order, "--confirm-plan", plan, "--account", "101-004-1234567-002"), wantCode: ExitPolicy},
+		{name: "other environment", env: map[string]string{EnvEnvironment: "live", EnvAllowLive: "true"}, args: append(order, "--confirm-plan", plan), wantCode: ExitPolicy},
+		{name: "tampered hash", args: append(order, "--confirm-plan", tampered), wantCode: ExitPolicy},
+		{name: "malformed", args: append(order, "--confirm-plan", "nope"), wantCode: ExitPolicy},
+		{name: "expired", args: append(order, "--confirm-plan", expired), wantCode: ExitPolicy},
+		{name: "expiry too far ahead", args: append(order, "--confirm-plan", farFuture), wantCode: ExitPolicy},
+		{name: "plan does not bypass live guard", env: map[string]string{EnvEnvironment: "live"}, args: append(order, "--confirm-plan", plan), wantCode: ExitPolicy},
+		{name: "plan does not bypass read-only", env: map[string]string{EnvReadOnly: "true"}, args: append(order, "--confirm-plan", plan), wantCode: ExitPolicy},
+		{name: "required but missing", env: map[string]string{EnvRequirePlan: "true"}, args: order, wantCode: ExitPolicy},
+		{name: "required and matching", env: map[string]string{EnvRequirePlan: "true"}, args: append(order, "--confirm-plan", fresh), wantCode: ExitOK, wantCall: true},
+		{name: "required allows dry run", env: map[string]string{EnvRequirePlan: "true"}, args: append(order, "--dry-run"), wantCode: ExitOK},
+		{name: "read command rejects plan", args: []string{"account", "summary", "--confirm-plan", plan}, wantCode: ExitUsage},
+	}
+	base := maps.Clone(h.env)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// The plan covers the URL, so every case reuses the same server.
+			h.env = maps.Clone(base)
+			maps.Copy(h.env, tt.env)
+			h.calls.Store(0)
+			if code := h.run(tt.args...); code != tt.wantCode {
+				t.Fatalf("exit = %d, want %d (stderr %s)", code, tt.wantCode, h.stderr.String())
+			}
+			if (h.calls.Load() > 0) != tt.wantCall {
+				t.Errorf("server calls = %d, wantCall %v", h.calls.Load(), tt.wantCall)
+			}
+		})
+	}
+}
+
+func TestConfirmPlanSeparateCaches(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("this test exercises XDG_CACHE_HOME on Linux")
+	}
+	h := newHarness(t, okJSON(`{}`))
+	h.env[EnvRequirePlan] = "true"
+	order := []string{"order", "market", "--instrument", "EUR_USD", "--units", "100"}
+	if code := h.run(append(order, "--dry-run")...); code != ExitOK {
+		t.Fatalf("dry run exit %d: %s", code, h.stderr.String())
+	}
+	var dry struct {
+		PlanHash string `json:"planHash"`
+	}
+	if err := json.Unmarshal(h.stdout.Bytes(), &dry); err != nil || dry.PlanHash == "" {
+		t.Fatalf("dry run stdout = %s", h.stdout.String())
+	}
+	// The same plan can send once per cache namespace, not once globally.
+	// Returning to either persistent namespace still rejects its replay.
+	a, b := t.TempDir(), t.TempDir()
+	for _, tt := range []struct {
+		name     string
+		cache    string
+		wantCode int
+	}{
+		{"first cache", a, ExitOK},
+		{"separate cache allows the same plan", b, ExitOK},
+		{"first cache still refuses replay", a, ExitPolicy},
+		{"second cache still refuses replay", b, ExitPolicy},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_CACHE_HOME", tt.cache)
+			h.calls.Store(0)
+			if code := h.run(append(order, "--confirm-plan", dry.PlanHash)...); code != tt.wantCode {
+				t.Fatalf("exit = %d, want %d (stderr %s)", code, tt.wantCode, h.stderr.String())
+			}
+			wantCalls := int32(0)
+			if tt.wantCode == ExitOK {
+				wantCalls = 1
+			}
+			if got := h.calls.Load(); got != wantCalls {
+				t.Errorf("server calls = %d, want %d", got, wantCalls)
+			}
+		})
+	}
+}
+
+func TestPlanCheckAllowsOneRequest(t *testing.T) {
+	now := time.Now()
+	dir := filepath.Join(t.TempDir(), "plans")
+	stale := filepath.Join(dir, strconv.FormatInt(now.Add(-time.Minute).Unix(), 10)+".old")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := planHash(oanda.Practice, testAccount, "PUT", "https://x/v3", []byte(`{}`), now.Add(time.Minute).Unix())
+	// Separate callbacks model separate CLI invocations.
+	for i, wantErr := range []bool{false, true} {
+		err := planCheck(plan, oanda.Practice, testAccount, dir, func() time.Time { return now })("PUT", "https://x/v3", []byte(`{}`))
+		var policy *PolicyError
+		if wantErr != errors.As(err, &policy) {
+			t.Errorf("request %d: err = %v, want error %v", i+1, err, wantErr)
+		}
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expired marker was not pruned: %v", err)
 	}
 }
 
