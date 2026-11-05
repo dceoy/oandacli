@@ -121,7 +121,7 @@ oandactl pricing stream --instruments EUR_USD,USD_JPY --max-messages 20 --durati
 oandactl transaction stream --duration 60s
 ```
 
-Heartbeats are hidden unless `--include-heartbeats` is given. If the stream fails part-way, the lines already printed are valid, but the command exits non-zero with the error on stderr. Treat that output as incomplete.
+Heartbeats are hidden unless `--include-heartbeats` is given; included heartbeats count toward `--max-messages`, hidden ones do not. The CLI does not generate an initial heartbeat or duplicate messages: it forwards each received server message once (normalizing JSON whitespace). Two HEARTBEATs close together at transaction-stream startup come from the server stream, not the CLI; do not assume fixed startup spacing. If the stream fails part-way, the lines already printed are valid, but the command exits non-zero with the error on stderr. Treat that output as incomplete.
 
 ## Related
 

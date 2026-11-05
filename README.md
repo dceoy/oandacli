@@ -79,6 +79,10 @@ oandactl transaction since --id 6410 --type ORDER_FILL
 
 Global flags work on every command: `--account`, `--env`, `--token-file`, `--timeout`, `--pretty`, `--compact`, `--dry-run`, `--confirm-plan`, `--allow-live`, `--read-only` and `--verbose`. Output is pretty-printed when stdout is a terminal and compact otherwise.
 
+### Streaming heartbeats
+
+`transaction stream` and `pricing stream` hide HEARTBEAT messages unless `--include-heartbeats` is given. The CLI neither generates an initial heartbeat nor duplicates received messages: each server message is forwarded once (with JSON whitespace normalized). Two heartbeats close together at transaction-stream startup therefore reflect the server stream, not a CLI-generated pair; do not assume fixed startup spacing. Included heartbeats count toward `--max-messages`; hidden ones do not.
+
 ### Commands
 
 | Group         | Commands                                                                                                                                     |
