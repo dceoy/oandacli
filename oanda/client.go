@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode"
 )
@@ -313,13 +314,7 @@ func NewClient(token Token, opts ...Option) (*Client, error) {
 	} else {
 		t := newTransport()
 		if o.connectionWait != nil {
-			dial := t.DialContext
-			t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-				if err := o.connectionWait(ctx); err != nil {
-					return nil, err
-				}
-				return dial(ctx, network, addr)
-			}
+			t.DialContext = newConnectionDialer(o.connectionWait).DialContext
 		}
 		base = http.Client{Transport: t}
 	}
@@ -360,6 +355,18 @@ func (c *Client) Environment() Environment { return c.env }
 
 // ReadOnly reports whether the client refuses state-changing requests.
 func (c *Client) ReadOnly() bool { return c.readOnly }
+
+// newConnectionDialer preserves the default transport's dial timeouts. ControlContext
+// runs after DNS resolution for every address attempt, including fallback attempts.
+func newConnectionDialer(wait func(context.Context) error) *net.Dialer {
+	return &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+		ControlContext: func(ctx context.Context, _, _ string, _ syscall.RawConn) error {
+			return wait(ctx)
+		},
+	}
+}
 
 func newTransport() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
