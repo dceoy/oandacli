@@ -46,6 +46,7 @@ const (
 	EnvAllowLive     = "OANDA_ALLOW_LIVE"
 	EnvReadOnly      = "OANDA_READ_ONLY"
 	EnvRequirePlan   = "OANDA_REQUIRE_CONFIRM_PLAN"
+	EnvPlanTTL       = "OANDA_PLAN_TTL"
 	EnvMaxOrderUnits = "OANDA_MAX_ORDER_UNITS"
 	EnvAPIURL        = "OANDA_API_URL"
 	EnvStreamURL     = "OANDA_STREAM_URL"
@@ -75,6 +76,7 @@ type globals struct {
 	env       string
 	tokenFile string
 	confirm   string
+	planTTL   string
 	timeout   time.Duration
 	pretty    bool
 	compact   bool
@@ -100,8 +102,9 @@ func (a *App) registerGlobals(fs *flag.FlagSet, g *globals) {
 	fs.BoolVar(&g.allowLive, "allow-live", a.envBool(EnvAllowLive), "Allow state-changing requests in the live environment (env "+EnvAllowLive+")")
 	// The flag can only add protection: OANDA_READ_ONLY=true is enforced in newEnv
 	// and cannot be revoked with --read-only=false.
-	fs.BoolVar(&g.readOnly, "read-only", false, "Refuse every state-changing request (env "+EnvReadOnly+"=true always applies)")
+	fs.BoolVar(&g.readOnly, "read-only", false, "Refuse state-changing execution; --dry-run is allowed (env "+EnvReadOnly+"=true always applies)")
 	fs.StringVar(&g.confirm, "confirm-plan", "", "Send the state-changing request only if it matches this planHash from --dry-run (env "+EnvRequirePlan+"=true makes it mandatory)")
+	fs.StringVar(&g.planTTL, "plan-ttl", envOr(a.Getenv(EnvPlanTTL), planTTL.String()), "Dry-run plan lifetime: 1m to 60m, default 10m (env "+EnvPlanTTL+")")
 	fs.BoolVar(&g.verbose, "verbose", false, "Log requests to stderr (tokens are never logged)")
 }
 
@@ -185,6 +188,10 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	if fs.NArg() > 0 {
 		return a.fail(usagef("unexpected argument %q (all parameters are --flags)", fs.Arg(0)))
 	}
+	ttl, err := time.ParseDuration(g.planTTL)
+	if err != nil || ttl < minPlanTTL || ttl > maxPlanTTL {
+		return a.fail(usagef("--plan-ttl / %s must be a duration between 1m and 60m", EnvPlanTTL))
+	}
 	if g.pretty || g.compact {
 		p := g.pretty && !g.compact
 		a.Pretty = &p
@@ -248,7 +255,7 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	res, err := cmd.Run(ctx, env, args2)
 	var dry *oanda.DryRunError
 	if cmd.Mutating && errors.As(err, &dry) {
-		exp := time.Now().Add(planTTL).Unix()
+		exp := time.Now().Add(ttl).Unix()
 		return a.writeJSON(map[string]any{
 			"dryRun":        true,
 			"request":       dry,
@@ -307,7 +314,7 @@ func (a *App) newEnv(cmd *Command, cfg globals) (*Env, error) {
 	}
 	if cmd.Mutating {
 		switch {
-		case cfg.readOnly || a.envBool(EnvReadOnly):
+		case (cfg.readOnly || a.envBool(EnvReadOnly)) && !cfg.dryRun:
 			return nil, &PolicyError{Msg: "read-only mode is enabled (--read-only / " + EnvReadOnly + "); state-changing commands are refused"}
 		case oenv == oanda.Live && !cfg.allowLive && !cfg.dryRun:
 			return nil, &PolicyError{Msg: "refusing a state-changing request in the live environment; pass --allow-live or set " + EnvAllowLive + "=true"}
@@ -625,9 +632,10 @@ Configuration (environment):
   OANDA_ACCOUNT_ID                         Default account ID
   OANDA_ENVIRONMENT                        practice (default) or live
   OANDA_ALLOW_LIVE=true                    Allow trading in the live environment
-  OANDA_READ_ONLY=true                     Refuse all state-changing commands
+  OANDA_READ_ONLY=true                     Refuse state-changing execution (not dry runs)
   OANDA_MAX_ORDER_UNITS                    Reject orders larger than this
   OANDA_REQUIRE_CONFIRM_PLAN=true          Require --confirm-plan for trading
+  OANDA_PLAN_TTL                           Dry-run plan lifetime: 1m to 60m (default 10m)
 
 Output is JSON on stdout; errors are JSON on stderr.
 Exit codes: 0 ok, 1 error, 2 usage, 3 API 4xx, 4 API 5xx, 5 refused by policy.
@@ -639,7 +647,7 @@ Run 'oandactl <group> <command> --help' for flags.
 func (a *App) printCommandHelp(w io.Writer, cmd *Command, fs *flag.FlagSet) {
 	_, _ = fmt.Fprintf(w, "%s\n\nUsage:\n  oandactl %s [--flags]\n\n", cmd.Summary, cmd.Name())
 	if cmd.Mutating {
-		_, _ = fmt.Fprint(w, "This command changes account state. It is refused in read-only mode and,\nin the live environment, unless --allow-live is given.\n\n")
+		_, _ = fmt.Fprint(w, "This command changes account state. Execution is refused in read-only mode\nand, in the live environment, unless --allow-live is given. --dry-run is allowed.\n\n")
 	}
 	if len(cmd.Params) > 0 {
 		_, _ = fmt.Fprintln(w, "Flags:")

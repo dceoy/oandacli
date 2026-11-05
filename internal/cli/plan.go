@@ -15,8 +15,12 @@ import (
 	"github.com/dceoy/oandactl/oanda"
 )
 
-// planTTL is how long a plan hash printed by --dry-run stays valid.
-const planTTL = 10 * time.Minute
+// planTTL is the default lifetime; operators may explicitly choose a bounded TTL.
+const (
+	planTTL    = 10 * time.Minute
+	minPlanTTL = time.Minute
+	maxPlanTTL = time.Hour
+)
 
 // planHash binds a state-changing request to its environment, account,
 // method, URL, body and expiry. The format is "<unix expiry>.<sha256 hex>".
@@ -47,7 +51,9 @@ func planCheck(plan string, env oanda.Environment, account, dir string, now func
 			return &PolicyError{Msg: "--confirm-plan is malformed; copy planHash from the --dry-run output"}
 		case t > expires:
 			return &PolicyError{Msg: "--confirm-plan has expired; run --dry-run again"}
-		case expires > t+int64(planTTL/time.Second):
+		// Verification uses the global bound, not the preview's local setting:
+		// the expiry is already bound into the hash and need not be repeated.
+		case expires > t+int64(maxPlanTTL/time.Second):
 			return &PolicyError{Msg: "--confirm-plan expiry is too far in the future"}
 		case subtle.ConstantTimeCompare([]byte(planHash(env, account, method, url, body, expires)), []byte(plan)) != 1:
 			return &PolicyError{Msg: "--confirm-plan does not match this request; nothing was sent"}
