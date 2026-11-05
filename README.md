@@ -10,9 +10,33 @@ A secure, dependency-free Go SDK and CLI for the [OANDA REST-V20 API](https://de
 
 ## Install
 
+### Pinned binary (no Go required)
+
+[Releases](https://github.com/dceoy/oandactl/releases) provide standalone binaries for Linux and macOS (`linux`/`darwin`, `amd64`/`arm64`) plus `SHA256SUMS`. Choose a published version and your platform, download into an empty directory, and verify before installing:
+
+```sh
+version=v0.1.0  # example: choose a published release
+platform=linux_amd64
+asset="oandactl_${version}_${platform}"
+url="https://github.com/dceoy/oandactl/releases/download/${version}"
+# macOS: replace sha256sum -c with shasum -a 256 -c below
+curl -fLO "${url}/${asset}" &&
+curl -fLO "${url}/SHA256SUMS" &&
+grep "  ${asset}$" SHA256SUMS > selected.sha256 &&
+sha256sum -c selected.sha256 &&
+install -m 755 "$asset" "$HOME/.local/bin/oandactl" &&
+oandactl version              # prints the release tag, e.g. v0.1.0
+```
+
+Ensure `$HOME/.local/bin` exists and is on `PATH`. Checksums detect corruption; they are downloaded from the same trusted GitHub release, not an independent signature.
+
+### With Go
+
 ```sh
 go install github.com/dceoy/oandactl@latest
 ```
+
+A plain `go install`/`go build` reports `dev`; use the release binaries or `make build` for an embedded version.
 
 To build from source:
 
@@ -194,6 +218,8 @@ Options:
 | Supply chain                | No third-party modules. CI runs golangci-lint, gosec, govulncheck, OSV-Scanner, Trivy, Semgrep and CodeQL.                                                                                                                                                                                                  |
 
 ## Development
+
+Maintainers publish via the **Release** workflow on `main`. For the first release (no existing tags/releases), supply `tag-name: v0.1.0`; subsequent runs can leave it empty to use `version-bump`. The existing reusable workflow creates the release, then the exact release tag is checked out to build and attach all four binaries and `SHA256SUMS`. Assets arrive only after the build/upload jobs succeed; a release without those assets is incomplete. Re-running with the same explicit tag restores assets without creating another version.
 
 ```sh
 make check   # gofmt, go vet, golangci-lint, gosec, tests with -race, govulncheck

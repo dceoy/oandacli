@@ -11,7 +11,7 @@ The CLI itself enforces the trading safeguards described below. Follow this skil
 
 ## Setup
 
-1. Check whether it is installed: `oandactl version`. If not, install it (requires Go):
+1. Check whether it is installed: `oandactl version`. If not, prefer a pinned binary from [GitHub Releases](https://github.com/dceoy/oandactl/releases) for Linux/macOS, amd64/arm64. Follow the [README binary installation instructions](../../README.md#pinned-binary-no-go-required), verify it against the release's `SHA256SUMS` before running it, and check that `oandactl version` matches the selected tag. Alternatively, with Go:
 
    ```bash
    go install github.com/dceoy/oandactl@latest

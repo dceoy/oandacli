@@ -3,6 +3,10 @@ name: Release
 on:
   workflow_dispatch:  # checkov:skip=CKV_GHA_7:workflow_dispatch inputs are required for release parameters
     inputs:
+      tag-name:
+        required: false
+        type: string
+        description: Explicit version tag (use v0.1.0 for the first release)
       version-bump:
         required: false
         type: choice
@@ -15,13 +19,77 @@ on:
           - patch-release
 permissions:
   contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
 jobs:
+  validate-input:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Validate explicit version
+        env:
+          RELEASE_TAG: ${{ inputs.tag-name }}
+        run: |
+          if [[ -n "$RELEASE_TAG" && ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo '::error::tag-name must be a stable version such as v0.1.0'
+            exit 1
+          fi
   github-release:
+    needs: validate-input
     permissions:
       contents: write
-    uses: dceoy/gha-for-devops/.github/workflows/github-release.yml@main  # zizmor: ignore[unpinned-uses]
+    uses: dceoy/gha-for-devops/.github/workflows/github-release.yml@932da56288601d383f3d64b51e2e32ca1c35bd71
     with:
+      tag-name: ${{ inputs.tag-name }}
       create-new-tag: true
       version-bump: ${{ inputs.version-bump }}
     secrets:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  build-binaries:
+    needs: github-release
+    if: needs.github-release.outputs.release-tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ needs.github-release.outputs.release-tag }}
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build binaries and checksums
+        env:
+          RELEASE_TAG: ${{ needs.github-release.outputs.release-tag }}
+        run: bash .github/scripts/build-release.sh
+      - name: Stage release assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: release-binaries
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+  upload-binaries:
+    needs: [github-release, build-binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: release-binaries
+          path: dist
+      - name: Attach binaries and checksums to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.github-release.outputs.release-tag }}
+        run: gh release upload "$RELEASE_TAG" dist/* --clobber
