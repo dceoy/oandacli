@@ -381,6 +381,35 @@ func Commands() []*Command {
 			},
 		},
 
+		{
+			Path: []string{"pricing", "candles"}, Summary: "Get account-specific candlesticks for an instrument", Account: true,
+			Params: []Param{
+				pInstrument, pGranularity, pPrice,
+				{Name: "count", Type: TInt, Desc: "Number of candles (1-5000, default 500)"},
+				{Name: "from", Type: TTime, Desc: "Start time (RFC 3339)"},
+				{Name: "to", Type: TTime, Desc: "End time (RFC 3339)"},
+				{Name: "units", Type: TString, Desc: "Units used to calculate VWAP prices"},
+				pSmooth,
+				{Name: "include-first", Type: TBool, Desc: "Include the candle at --from (default true)"},
+				pDailyAlign, pAlignTZ, pWeeklyAlign,
+			},
+			Run: func(ctx context.Context, e *Env, a *Args) (any, error) {
+				p := oanda.CandlesParams{
+					Price: a.Str("price"), Granularity: oanda.CandlestickGranularity(a.Str("granularity")), Count: a.Int("count"),
+					From: a.Time("from"), To: a.Time("to"), Smooth: a.Bool("smooth"), DailyAlignment: optInt(a, "daily-alignment"),
+					AlignmentTimezone: a.Str("alignment-timezone"), WeeklyAlignment: oanda.WeeklyAlignment(a.Str("weekly-alignment")),
+				}
+				if a.Has("include-first") {
+					b := a.Bool("include-first")
+					p.IncludeFirst = &b
+				}
+				if a.Has("count") && p.Count == 0 {
+					return nil, usagef("--count must be between 1 and 5000")
+				}
+				return e.Client.GetAccountCandles(ctx, e.AccountID, a.Str("instrument"), p, oanda.Decimal(a.Str("units")))
+			},
+		},
+
 		// ---- order ----
 		{
 			Path: []string{"order", "list"}, Summary: "List orders", Account: true,

@@ -85,7 +85,7 @@ Global flags work on every command: `--account`, `--env`, `--token-file`, `--tim
 | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `account`     | `list`, `get`, `summary`, `instruments`, `changes`, `configure`\*                                                                            |
 | `instrument`  | `candles`, `order-book`, `position-book`                                                                                                     |
-| `pricing`     | `get`, `latest-candles`, `stream`                                                                                                            |
+| `pricing`     | `get`, `candles`, `latest-candles`, `stream`                                                                                                 |
 | `order`       | `list`, `pending`, `get`, `market`\*, `limit`\*, `stop`\*, `market-if-touched`\*, `create`\*, `replace`\*, `cancel`\*, `client-extensions`\* |
 | `trade`       | `list`, `open`, `get`, `close`\*, `client-extensions`\*, `orders`\*                                                                          |
 | `position`    | `list`, `open`, `get`, `close`\*                                                                                                             |

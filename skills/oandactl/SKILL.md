@@ -58,6 +58,7 @@ oandactl account summary                                   # balance, NAV, margi
 oandactl account instruments --instruments EUR_USD,USD_JPY # trading rules (pip location, min size, margin rate)
 oandactl pricing get --instruments EUR_USD,USD_JPY         # current bid/ask
 oandactl instrument candles --instrument EUR_USD --granularity H1 --count 100 --price BA
+oandactl pricing candles --account 101-004-1234567-001 --instrument EUR_USD --granularity H1 --count 10 --units 1000
 oandactl pricing latest-candles --specs EUR_USD:M5:M,USD_JPY:H1:BA
 oandactl instrument order-book --instrument EUR_USD
 oandactl trade open                                        # open trades
@@ -65,6 +66,8 @@ oandactl position open                                     # open positions
 oandactl order pending                                     # pending orders
 oandactl transaction since --id 6410 --type ORDER_FILL     # transactions after an ID
 ```
+
+For historical candles, use `instrument candles` when no account ID is available; it requires no account. Use `pricing candles` for account-specific candles: it requires `--account` or `OANDA_ACCOUNT_ID` (otherwise it exits with a usage error), and is the only one of these two commands supporting VWAP prices via `--units`. Here `--units` specifies the volume used to calculate prices, not an order to trade; both candle commands are read-only.
 
 ### Pacing
 
