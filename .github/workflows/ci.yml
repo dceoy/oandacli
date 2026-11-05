@@ -47,10 +47,8 @@ jobs:
       contents: read
     uses: dceoy/gha-for-devops/.github/workflows/markdown-lint.yml@main  # zizmor: ignore[unpinned-uses]
   dependabot-auto-merge:
-    # Keep human-triggered synchronize/reopen events from enabling auto-merge.
-    # The called workflow separately requires a Dependabot PR author.
-    if: >  # zizmor: ignore[bot-conditions]
-      github.event_name == 'pull_request' && github.actor == 'dependabot[bot]'
+    if: >
+      github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
     needs:
       - go-lint-and-scan
       - go-test
