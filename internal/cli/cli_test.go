@@ -236,6 +236,54 @@ func TestPricingStreamNDJSON(t *testing.T) {
 	}
 }
 
+func TestTransactionStreamHeartbeats(t *testing.T) {
+	const (
+		first       = `{"type":"HEARTBEAT","time":"2026-11-05T11:10:23.257Z","lastTransactionID":"351219"}`
+		second      = `{"type":"HEARTBEAT","time":"2026-11-05T11:10:23.292Z","lastTransactionID":"351219"}`
+		transaction = `{"type":"ORDER_FILL","id":"351220"}`
+	)
+	for _, tt := range []struct {
+		name    string
+		lines   []string
+		include bool
+		limit   int
+		want    []string
+	}{
+		{"single heartbeat is not duplicated", []string{first, transaction}, true, 2, []string{first, transaction}},
+		{"startup pair is preserved", []string{first, second, transaction}, true, 3, []string{first, second, transaction}},
+		{"identical server lines are not deduplicated", []string{first, first, transaction}, true, 3, []string{first, first, transaction}},
+		{"included heartbeats count toward limit", []string{first, second, transaction}, true, 2, []string{first, second}},
+		{"hidden heartbeats do not count", []string{first, second, transaction}, false, 1, []string{transaction}},
+		{"no synthetic heartbeat", []string{transaction}, true, 1, []string{transaction}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v3/accounts/"+testAccount+"/transactions/stream" {
+					t.Errorf("unexpected stream path %s", r.URL.Path)
+				}
+				for _, line := range tt.lines {
+					_, _ = io.WriteString(w, line+"\n")
+					w.(http.Flusher).Flush()
+				}
+				<-r.Context().Done()
+			})
+			args := []string{"transaction", "stream", "--duration", "5s", "--max-messages", strconv.Itoa(tt.limit)}
+			if tt.include {
+				args = append(args, "--include-heartbeats")
+			}
+			if code := h.run(args...); code != ExitOK {
+				t.Fatalf("exit %d: %s", code, h.stderr.String())
+			}
+			if want := strings.Join(tt.want, "\n") + "\n"; h.stdout.String() != want {
+				t.Errorf("stdout = %q, want %q", h.stdout.String(), want)
+			}
+			if h.calls.Load() != 1 {
+				t.Errorf("stream requests = %d, want 1", h.calls.Load())
+			}
+		})
+	}
+}
+
 func TestSchemaListsAllCommands(t *testing.T) {
 	h := newHarness(t, okJSON(`{}`))
 	if code := h.run("schema"); code != ExitOK {

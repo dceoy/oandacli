@@ -110,6 +110,10 @@ On Linux and macOS, the CLI automatically spaces new TCP connection attempts at 
 
 Use a writable local cache with working file locks. Missing/unwritable cache configuration, invalid timestamps or clock rollback fail closed instead of silently disabling pacing. Waits respect dial cancellation and are bounded to 30 seconds. Separate cache namespaces, users, hosts or other API clients are not coordinated; those callers still need external pacing. CLI connection pacing currently supports Linux/macOS; other platforms return an error before dialing. SDK clients do not use a shared cache unless explicitly configured.
 
+### Streaming heartbeats
+
+`transaction stream` and `pricing stream` hide HEARTBEAT messages unless `--include-heartbeats` is given. The CLI neither generates an initial heartbeat nor duplicates received messages: each server message is forwarded once (with JSON whitespace normalized). Two heartbeats close together at transaction-stream startup therefore reflect the server stream, not a CLI-generated pair; do not assume fixed startup spacing. Included heartbeats count toward `--max-messages`; hidden ones do not.
+
 ### Commands
 
 | Group         | Commands                                                                                                                                     |
