@@ -84,6 +84,27 @@ func TestPacingCancellation(t *testing.T) {
 	}
 }
 
+func TestWriteTimestampCancelled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "connections")
+	const state = "1\n"
+	if err := os.WriteFile(path, []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := writeTimestamp(ctx, f); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation, got %v", err)
+	}
+	if b, err := os.ReadFile(path); err != nil || string(b) != state {
+		t.Fatalf("cancelled reservation changed state: %q, %v", b, err)
+	}
+}
+
 func TestPacingCacheFailure(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "not-a-directory")
 	if err := os.WriteFile(dir, nil, 0o600); err != nil {

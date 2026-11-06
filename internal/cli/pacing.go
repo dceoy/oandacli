@@ -64,13 +64,18 @@ func paceConnection(ctx context.Context, dir string) error {
 			}
 		}
 	}
-	if err := writeTimestamp(f); err != nil {
+	if err := writeTimestamp(ctx, f); err != nil {
 		return fmt.Errorf("connection pacing write: %w", err)
 	}
 	return nil
 }
 
-func writeTimestamp(f *os.File) error {
+// writeTimestamp reserves the connection only if the request is still live, so a
+// cancellation that wins a race with the lock or delay leaves the state untouched.
+func writeTimestamp(ctx context.Context, f *os.File) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := f.Truncate(0); err != nil {
 		return err
 	}
