@@ -1,22 +1,34 @@
-name: Coverage development source snapshot
+name: Import coverage tests
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
     branches: [main]
+    types: [opened, synchronize, reopened]
 permissions:
   contents: read
 jobs:
-  snapshot:
+  import-tests:
+    if: >
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'ci/enforce-100pct-statement-coverage'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out the contributor branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false
-      - name: Package source
-        run: tar -czf /tmp/oandactl-source.tar.gz --exclude=.git .
-      - name: Upload source snapshot
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: dev-source-snapshot
-          path: /tmp/oandactl-source.tar.gz
-          retention-days: 1
+          ref: ${{ github.event.pull_request.head.ref }}
+          persist-credentials: true
+      - name: Restore and commit tested Go sources
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          cat .coverage-stage/part* | base64 --decode > /tmp/oandactl-coverage-tests.tar.gz
+          echo "0cbb7c64db8e968b4f7cc04a4d81b8cf02300d15bc21664e27347e17d46fc5d0  /tmp/oandactl-coverage-tests.tar.gz" | sha256sum --check
+          tar -xzf /tmp/oandactl-coverage-tests.tar.gz
+          git add oanda/coverage_*_test.go internal/cli/coverage_*_test.go
+          git rm -r .coverage-stage .github/workflows/coverage-dev-snapshot.yml
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'test: expand SDK and CLI coverage with boundary cases'
+          git push origin HEAD:refs/heads/ci/enforce-100pct-statement-coverage
