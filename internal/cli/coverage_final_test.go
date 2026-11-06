@@ -101,16 +101,10 @@ func TestFinalPrettyAndWriteJSONFailures(t *testing.T) {
 }
 
 func TestFinalFilesystemFailures(t *testing.T) {
-	// A permission-denied check requires an unprivileged user; lock errors
-	// below must still be covered when the suite runs as root.
-	if os.Geteuid() != 0 {
-		dir := filepath.Join(t.TempDir(), "plans")
-		if err := os.Mkdir(dir, 0o500); err != nil {
-			t.Fatal(err)
-		}
-		if err := consumePlan(dir, "someplan", time.Now().Unix()); err == nil {
-			t.Error("plan marker created in read-only directory")
-		}
+	// Force the plan-file creation error independently of user privileges.
+	// The plan directory exists, but this nested marker parent does not.
+	if err := consumePlan(t.TempDir(), filepath.Join("missing", "plan"), time.Now().Unix()); err == nil {
+		t.Error("plan marker unexpectedly created")
 	}
 
 	f, err := os.CreateTemp(t.TempDir(), "lock")
@@ -139,7 +133,6 @@ func TestFinalFilesystemFailures(t *testing.T) {
 	if err := lockConnection(cancelled, waiter); !errors.Is(err, context.Canceled) {
 		t.Errorf("lock with cancelled context: %v", err)
 	}
-
 }
 
 type failingPacingFile struct {
