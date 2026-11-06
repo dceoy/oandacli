@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -69,11 +68,8 @@ func TestFinalTokenFileReadFailures(t *testing.T) {
 	if _, err := h.app("").loadToken(empty); err == nil {
 		t.Error("empty token file accepted")
 	}
-	if runtime.GOOS == "linux" {
-		// /proc/self/mem is a private regular file whose read at offset 0 fails with EIO.
-		if _, err := h.app("").loadToken("/proc/self/mem"); err == nil || !strings.Contains(err.Error(), "cannot read token file") {
-			t.Errorf("unreadable token file: %v", err)
-		}
+	if _, err := readTokenFile(failReader{}); err == nil || !strings.Contains(err.Error(), "cannot read token file") {
+		t.Errorf("unreadable token file: %v", err)
 	}
 }
 
@@ -105,15 +101,16 @@ func TestFinalPrettyAndWriteJSONFailures(t *testing.T) {
 }
 
 func TestFinalFilesystemFailures(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("permission failures need an unprivileged user")
-	}
-	dir := filepath.Join(t.TempDir(), "plans")
-	if err := os.Mkdir(dir, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	if err := consumePlan(dir, "someplan", time.Now().Unix()); err == nil {
-		t.Error("plan marker created in read-only directory")
+	// A permission-denied check requires an unprivileged user; lock errors
+	// below must still be covered when the suite runs as root.
+	if os.Geteuid() != 0 {
+		dir := filepath.Join(t.TempDir(), "plans")
+		if err := os.Mkdir(dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		if err := consumePlan(dir, "someplan", time.Now().Unix()); err == nil {
+			t.Error("plan marker created in read-only directory")
+		}
 	}
 
 	f, err := os.CreateTemp(t.TempDir(), "lock")
@@ -143,21 +140,41 @@ func TestFinalFilesystemFailures(t *testing.T) {
 		t.Errorf("lock with cancelled context: %v", err)
 	}
 
-	if runtime.GOOS == "linux" {
-		base := t.TempDir()
-		if err := os.Symlink(os.DevNull, filepath.Join(base, "connections")); err != nil {
-			t.Fatal(err)
-		}
-		if err := paceConnection(context.Background(), base); err == nil || !strings.Contains(err.Error(), "write") {
-			t.Errorf("truncate failure: %v", err)
-		}
-		// /proc/self/mem is a private regular file whose read at offset 0 fails with EIO.
-		mem := t.TempDir()
-		if err := os.Symlink("/proc/self/mem", filepath.Join(mem, "connections")); err != nil {
-			t.Fatal(err)
-		}
-		if err := paceConnection(context.Background(), mem); err == nil || !strings.Contains(err.Error(), "read") {
-			t.Errorf("read failure: %v", err)
-		}
+}
+
+type failingPacingFile struct {
+	readErr     error
+	truncateErr error
+	writeErr    error
+}
+
+func (f failingPacingFile) Read([]byte) (int, error) {
+	return 0, f.readErr
+}
+
+func (f failingPacingFile) Truncate(int64) error {
+	return f.truncateErr
+}
+
+func (f failingPacingFile) WriteAt([]byte, int64) (int, error) {
+	return 0, f.writeErr
+}
+
+func TestPacingStateIOFailures(t *testing.T) {
+	tests := []struct {
+		name  string
+		state failingPacingFile
+		want  string
+	}{
+		{"read", failingPacingFile{readErr: errors.New("read failure")}, "connection pacing read"},
+		{"truncate", failingPacingFile{readErr: io.EOF, truncateErr: errors.New("truncate failure")}, "connection pacing write"},
+		{"write", failingPacingFile{readErr: io.EOF, writeErr: errors.New("write failure")}, "connection pacing write"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := paceLockedConnection(context.Background(), tc.state); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }
