@@ -125,7 +125,7 @@ func TestAllEndpointRoutes(t *testing.T) {
 					t.Errorf("missing JSON content type")
 				}
 				w.Header().Set("Content-Type", "application/json")
-				fmt.Fprint(w, `{}`)
+				_, _ = fmt.Fprint(w, `{}`)
 			})
 			if err := tc.call(c); err != nil {
 				t.Errorf("%s: %v", tc.name, err)

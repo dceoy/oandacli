@@ -77,7 +77,7 @@ func TestCLIHelpAndFlagFailures(t *testing.T) {
 }
 
 func TestCLIFileAndErrorBoundaryCases(t *testing.T) {
-	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{}`) })
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) { _, _ = fmt.Fprint(w, `{}`) })
 	missing := filepath.Join(t.TempDir(), "missing")
 	if c := h.run("account", "list", "--token-file", missing); c != ExitUsage {
 		t.Errorf("missing token file code=%d", c)

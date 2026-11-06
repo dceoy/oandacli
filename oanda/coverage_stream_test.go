@@ -71,7 +71,7 @@ func TestStreamServerErrorPaths(t *testing.T) {
 				if tc.status != 0 {
 					w.WriteHeader(tc.status)
 				}
-				fmt.Fprintln(w, tc.body)
+				_, _ = fmt.Fprintln(w, tc.body)
 			}, WithMaxRetries(0))
 			err := c.StreamTransactions(context.Background(), testAccount, func(StreamMessage) error { return tc.handlerErr })
 			if err == nil || !strings.Contains(err.Error(), tc.want) {

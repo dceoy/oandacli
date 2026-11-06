@@ -243,7 +243,7 @@ func TestErrorsAndModelSerializationEdgeCases(t *testing.T) {
 }
 
 func TestTransactionPageURLsAndFilters(t *testing.T) {
-	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{}`) })
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) { _, _ = fmt.Fprint(w, `{}`) })
 	base := c.apiURL.String() + "/v3/accounts/" + testAccount + "/transactions/idrange"
 	if _, err := c.GetTransactionPage(context.Background(), base+"?from=1&to=2&type=ORDER_FILL,STOP_LOSS_ORDER"); err != nil {
 		t.Error(err)

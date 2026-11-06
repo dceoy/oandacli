@@ -244,11 +244,11 @@ func (a *App) Run(ctx context.Context, args []string) int {
 		var buf bytes.Buffer
 		env.Emit = func(m json.RawMessage) error {
 			buf.Reset()
-			if err := json.Compact(&buf, m); err != nil {
-				return err
+			err := json.Compact(&buf, m)
+			if err == nil {
+				buf.WriteByte('\n')
+				_, err = a.Stdout.Write(buf.Bytes())
 			}
-			buf.WriteByte('\n')
-			_, err := a.Stdout.Write(buf.Bytes())
 			return err
 		}
 	}
@@ -394,10 +394,7 @@ func (a *App) loadToken(file string) (oanda.Token, error) {
 		}
 		defer func() { _ = f.Close() }()
 		st, err := f.Stat()
-		if err != nil {
-			return oanda.Token{}, usagef("cannot stat token file: %v", err)
-		}
-		if !st.Mode().IsRegular() {
+		if err != nil || !st.Mode().IsRegular() {
 			return oanda.Token{}, usagef("token file must be a regular file")
 		}
 		if runtime.GOOS != "windows" && st.Mode().Perm()&0o077 != 0 {

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The root main.go only wires signals to cli.Run and ends in os.Exit, which an
+# in-process test cannot cover without terminating the test runner; it is the
+# sole file excluded from the 100% statement requirement.
+
 awk '
   NR == 1 {
     if ($0 !~ /^mode: (set|count|atomic)$/) { invalid = 1; exit }
@@ -10,6 +14,7 @@ awk '
     invalid = 1
     exit
   }
+  $1 ~ /^github\.com\/dceoy\/oandactl\/main\.go:/ { next }
   {
     total += $2
     if ($3 > 0) covered += $2

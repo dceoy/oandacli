@@ -163,7 +163,7 @@ func TestClientMalformedRepliesAndNetworkErrors(t *testing.T) {
 				if tc.status != 0 {
 					w.WriteHeader(tc.status)
 				}
-				fmt.Fprint(w, tc.body)
+				_, _ = fmt.Fprint(w, tc.body)
 			}, WithMaxRetries(0))
 			_, err := c.ListAccounts(context.Background())
 			if (err != nil) != tc.wantError {

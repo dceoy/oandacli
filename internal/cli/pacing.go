@@ -64,19 +64,18 @@ func paceConnection(ctx context.Context, dir string) error {
 			}
 		}
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := f.Truncate(0); err != nil {
-		return fmt.Errorf("connection pacing truncate: %w", err)
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("connection pacing seek: %w", err)
-	}
-	if _, err := f.WriteString(strconv.FormatInt(time.Now().UnixNano(), 10) + "\n"); err != nil {
+	if err := writeTimestamp(f); err != nil {
 		return fmt.Errorf("connection pacing write: %w", err)
 	}
 	return nil
+}
+
+func writeTimestamp(f *os.File) error {
+	if err := f.Truncate(0); err != nil {
+		return err
+	}
+	_, err := f.WriteAt([]byte(strconv.FormatInt(time.Now().UnixNano(), 10)+"\n"), 0)
+	return err
 }
 
 func waitConnectionDelay(ctx context.Context, delay time.Duration) error {
