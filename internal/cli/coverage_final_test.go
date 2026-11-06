@@ -124,9 +124,22 @@ func TestFinalFilesystemFailures(t *testing.T) {
 	if err := lockConnection(context.Background(), f); err == nil || errors.Is(err, context.Canceled) {
 		t.Errorf("lock on closed file: %v", err)
 	}
+	held, err := os.CreateTemp(t.TempDir(), "lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.Close() }()
+	if err := lockConnection(context.Background(), held); err != nil {
+		t.Fatal(err)
+	}
+	waiter, err := os.Open(held.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = waiter.Close() }()
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := lockConnection(cancelled, f); !errors.Is(err, context.Canceled) {
+	if err := lockConnection(cancelled, waiter); !errors.Is(err, context.Canceled) {
 		t.Errorf("lock with cancelled context: %v", err)
 	}
 
