@@ -10,7 +10,8 @@ build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/oandactl .
 
 test:
-	go test -race -count=1 ./...
+	go test -race -count=1 -coverprofile=coverage.out ./...
+	bash .github/scripts/check-coverage.sh coverage.out
 
 lint:
 	@test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
