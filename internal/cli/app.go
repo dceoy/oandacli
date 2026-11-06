@@ -400,15 +400,7 @@ func (a *App) loadToken(file string) (oanda.Token, error) {
 		if runtime.GOOS != "windows" && st.Mode().Perm()&0o077 != 0 {
 			return oanda.Token{}, &PolicyError{Msg: fmt.Sprintf("token file %s is accessible by other users (mode %04o); run: chmod 600 %s", file, st.Mode().Perm(), file)}
 		}
-		b, err := io.ReadAll(io.LimitReader(f, 4096))
-		if err != nil {
-			return oanda.Token{}, usagef("cannot read token file: %v", err)
-		}
-		t, err := oanda.NewToken(string(b))
-		if err != nil {
-			return oanda.Token{}, usagef("token file: %v", err)
-		}
-		return t, nil
+		return readTokenFile(f)
 	}
 	if command := a.Getenv(EnvTokenCommand); command != "" {
 		return a.runTokenCommand(command)
@@ -420,6 +412,19 @@ func (a *App) loadToken(file string) (oanda.Token, error) {
 	t, err := oanda.NewToken(v)
 	if err != nil {
 		return oanda.Token{}, usagef("%s: %v", EnvToken, err)
+	}
+	return t, nil
+}
+
+// readTokenFile keeps I/O failures independently testable on every platform.
+func readTokenFile(r io.Reader) (oanda.Token, error) {
+	b, err := io.ReadAll(io.LimitReader(r, 4096))
+	if err != nil {
+		return oanda.Token{}, usagef("cannot read token file: %v", err)
+	}
+	t, err := oanda.NewToken(string(b))
+	if err != nil {
+		return oanda.Token{}, usagef("token file: %v", err)
 	}
 	return t, nil
 }
