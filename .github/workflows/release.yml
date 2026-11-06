@@ -41,7 +41,7 @@ jobs:
     needs: validate-input
     permissions:
       contents: write
-    uses: dceoy/gha-for-devops/.github/workflows/go-package-release-on-github.yml@4b2f92455580cd14dc39a9fc2db7efdbe46cbe37
+    uses: dceoy/gha-for-devops/.github/workflows/go-package-release-on-github.yml@main  # zizmor: ignore[unpinned-uses]
     with:
       tag-name: ${{ inputs.tag-name }}
       create-new-tag: true
