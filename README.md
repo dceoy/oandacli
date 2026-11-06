@@ -233,7 +233,7 @@ Options:
 
 ## Development
 
-Maintainers publish via the **Release** workflow on `main`. For the first release (no existing tags/releases), supply `tag-name: v0.1.0`; subsequent runs can leave it empty to use `version-bump`. The existing reusable workflow creates the release, then the exact release tag is checked out to build and attach all four binaries and `SHA256SUMS`. Assets arrive only after the build/upload jobs succeed; a release without those assets is incomplete. Re-running with the same explicit tag restores assets without creating another version.
+Maintainers publish via the **Release** workflow on `main`. For the first release (no existing tags/releases), supply `tag-name: v0.1.0`; subsequent runs can leave it empty to use `version-bump`. The shared Go release workflow creates a draft release and checks out the exact release tag to build four Linux/macOS binaries with the tag embedded in `oandactl version`, then attaches `SHA256SUMS` and publishes the release only after all assets are uploaded. Failed builds or uploads leave a draft rather than an incomplete published release; rerun with the same explicit `tag-name` to restore the assets without creating a new version.
 
 ```sh
 make check   # gofmt, go vet, golangci-lint, gosec, tests with -race, govulncheck
