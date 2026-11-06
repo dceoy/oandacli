@@ -41,7 +41,7 @@ jobs:
     needs: validate-input
     permissions:
       contents: write
-    uses: dceoy/gha-for-devops/.github/workflows/github-release.yml@932da56288601d383f3d64b51e2e32ca1c35bd71
+    uses: dceoy/gha-for-devops/.github/workflows/github-release.yml@ccba60ab9d00fc013225b69bee21f5305d47fdda
     with:
       tag-name: ${{ inputs.tag-name }}
       create-new-tag: true
