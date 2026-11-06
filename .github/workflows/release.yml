@@ -41,7 +41,7 @@ jobs:
     needs: validate-input
     permissions:
       contents: write
-    uses: dceoy/gha-for-devops/.github/workflows/go-package-release-on-github.yml@a87389a0f8e98a256ca1f1047d5178600b164535
+    uses: dceoy/gha-for-devops/.github/workflows/go-package-release-on-github.yml@main  # zizmor: ignore[unpinned-uses]
     with:
       tag-name: ${{ inputs.tag-name }}
       create-new-tag: true
@@ -49,5 +49,6 @@ jobs:
       main-package: .
       binary-name: oandactl
       version-variable: github.com/dceoy/oandactl/internal/cli.Version
+      version-check-args: version
     secrets:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
