@@ -179,10 +179,9 @@ func (e *Env) orderBody(a *Args) (json.RawMessage, error) {
 	var wrapper struct {
 		Order json.RawMessage `json:"order"`
 	}
-	if err := json.Unmarshal(body, &wrapper); err != nil {
-		return nil, usagef("invalid body: %v", err)
-	}
-	if len(wrapper.Order) > 0 {
+	// --body is already a validated JSON object, so a failed decode only means
+	// there is no wrapper; the order object check below reports real errors.
+	if json.Unmarshal(body, &wrapper) == nil && len(wrapper.Order) > 0 {
 		body = wrapper.Order
 	}
 	var head struct {

@@ -13,6 +13,13 @@ import (
 
 const connectionInterval = 500 * time.Millisecond
 
+// pacingStateFile permits deterministic failure tests without OS-specific files.
+type pacingStateFile interface {
+	io.Reader
+	Truncate(int64) error
+	WriteAt([]byte, int64) (int, error)
+}
+
 // waitForConnection is lazy: help, dry runs and policy refusals need no cache.
 // One namespace covers both environments and REST/stream hosts, without storing
 // accounts, tokens or URLs. The SDK invokes it only for actual new connections.
@@ -44,6 +51,11 @@ func paceConnection(ctx context.Context, dir string) error {
 	if err := lockConnection(ctx, f); err != nil {
 		return fmt.Errorf("connection pacing lock: %w", err)
 	}
+	return paceLockedConnection(ctx, f)
+}
+
+// paceLockedConnection processes the locked state; callers own lock lifetime.
+func paceLockedConnection(ctx context.Context, f pacingStateFile) error {
 	b, err := io.ReadAll(io.LimitReader(f, 65))
 	if err != nil {
 		return fmt.Errorf("connection pacing read: %w", err)
@@ -64,19 +76,23 @@ func paceConnection(ctx context.Context, dir string) error {
 			}
 		}
 	}
+	if err := writeTimestamp(ctx, f); err != nil {
+		return fmt.Errorf("connection pacing write: %w", err)
+	}
+	return nil
+}
+
+// writeTimestamp reserves the connection only if the request is still live, so a
+// cancellation that wins a race with the lock or delay leaves the state untouched.
+func writeTimestamp(ctx context.Context, f pacingStateFile) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := f.Truncate(0); err != nil {
-		return fmt.Errorf("connection pacing truncate: %w", err)
+		return err
 	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("connection pacing seek: %w", err)
-	}
-	if _, err := f.WriteString(strconv.FormatInt(time.Now().UnixNano(), 10) + "\n"); err != nil {
-		return fmt.Errorf("connection pacing write: %w", err)
-	}
-	return nil
+	_, err := f.WriteAt([]byte(strconv.FormatInt(time.Now().UnixNano(), 10)+"\n"), 0)
+	return err
 }
 
 func waitConnectionDelay(ctx context.Context, delay time.Duration) error {

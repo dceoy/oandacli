@@ -36,6 +36,39 @@ jobs:
       go-version: stable
       race-enabled: true
       coverage-enabled: true
+      upload-coverage: true
+      coverage-artifact-name: go-coverage
+  macos-coverage:
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version: stable
+      - name: Require 100% statement coverage on macOS
+        run: make test
+  coverage-gate:
+    needs: go-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download coverage profile
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: go-coverage
+      - name: Require 100% statement coverage
+        run: bash .github/scripts/check-coverage.sh coverage.out
   github-actions-lint-and-scan:
     permissions:
       contents: read
@@ -52,6 +85,8 @@ jobs:
     needs:
       - go-lint-and-scan
       - go-test
+      - coverage-gate
+      - macos-coverage
       - github-actions-lint-and-scan
       - markdown-lint
     uses: dceoy/gha-for-devops/.github/workflows/dependabot-auto-merge.yml@main  # zizmor: ignore[unpinned-uses]
